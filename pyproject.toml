@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xray-detector"
+version = "0.1.0"
+description = "Pipeline de detection de comportements x-ray a partir de logs CoreProtect"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Colin Liaud" }]
+dependencies = [
+  "duckdb>=1.1",
+  "numpy>=2.0",
+  "pandas>=2.2",
+  "pyarrow>=16.0",
+  "scikit-learn>=1.5"
+]
+
+[project.optional-dependencies]
+dev = [
+  "ipykernel>=6.0",
+  "pytest>=8.0",
+  "ruff>=0.6"
+]
+viz = [
+  "matplotlib>=3.9",
+  "seaborn>=0.13",
+  "streamlit>=1.36"
+]
+
+[project.scripts]
+xray-detector = "xray_detector.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
