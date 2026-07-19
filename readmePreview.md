@@ -83,6 +83,7 @@ Le panneau d'analyse (à droite) :
 - **Score de suspicion** en anneau (0-100) avec verdict coloré (RAS / à surveiller / fortement suspect).
 - **Indicateurs du score** : trois jauges (rendement, détour entre filons, virages vers le filon) avec valeur brute et rappel du seuil de référence.
 - **Détails de la session** : durée, blocs, blocs/min, filons, blocs entre filons, segments droits H/V, virages/100, pas verticaux.
+- **Localisation** : monde et coordonnées du centre de la zone minée, avec un bouton **Copier /tp** qui met `/tp @s X Y Z` dans le presse-papier — à coller en jeu pour aller inspecter sur place (le point visé est un bloc cassé au milieu du parcours, donc dans la galerie creusée ; penser à se mettre dans le bon monde avant).
 - **Classement des sessions** trié par score pour le minerai choisi — cliquer sur une ligne ouvre la session.
 
 L'analyse porte sur la **session entière** : la fenêtre temporelle filtre la scène 3D, pas le score.

@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -366,6 +367,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .tile span { font-size: 10.5px; color: var(--ink-3); }
 
+  .loc {
+    display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+    background: var(--raised); border: 1px solid var(--border); border-radius: 10px;
+  }
+  .loc-info { flex: 1 1 auto; min-width: 0; }
+  .loc-info b { display: block; font-size: 12.5px; }
+  .loc-info span {
+    font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums;
+  }
+  #copy-tp { white-space: nowrap; }
+  #copy-tp.copied { border-color: #0ca30c; color: #7fd67f; }
+
   .rank { display: flex; flex-direction: column; gap: 6px; }
   .rank-row {
     display: flex; align-items: center; gap: 10px; padding: 8px 10px;
@@ -442,6 +455,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div>
       <div class="section-title">Details de la session</div>
       <div class="tiles" id="tiles"></div>
+    </div>
+    <div>
+      <div class="section-title">Localisation</div>
+      <div class="loc">
+        <div class="loc-info">
+          <b id="loc-world">-</b>
+          <span id="loc-coords">-</span>
+        </div>
+        <button id="copy-tp" title="Copier la commande de teleportation vers le centre de la zone minee">Copier /tp</button>
+      </div>
     </div>
     <div>
       <div class="section-title">Classement des sessions</div>
@@ -822,9 +845,44 @@ function selectSession(i) {
   syncControls();
   render();
   renderPanel();
+  renderLocation(S);
+}
+
+function tpTarget(S) {
+  // Milieu du parcours : un bloc casse au coeur de la galerie (donc de l'air),
+  // ou l'on peut arriver sans etre dans la roche.
+  const mid = Math.floor(S.x.length / 2);
+  return { x: S.x[mid], y: S.y[mid], z: S.z[mid] };
+}
+
+function renderLocation(S) {
+  const p = tpTarget(S);
+  el("loc-world").textContent = S.world;
+  el("loc-coords").textContent = "X " + p.x + " · Y " + p.y + " · Z " + p.z;
+  const btn = el("copy-tp");
+  btn.classList.remove("copied");
+  btn.textContent = "Copier /tp";
+}
+
+function copyTpCommand() {
+  const S = DATA.sessions[state.i];
+  const p = tpTarget(S);
+  const cmd = "/tp @s " + p.x + " " + p.y + " " + p.z;
+  const done = () => {
+    const btn = el("copy-tp");
+    btn.classList.add("copied");
+    btn.textContent = "Copié !";
+    setTimeout(() => { btn.classList.remove("copied"); btn.textContent = "Copier /tp"; }, 1600);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cmd).then(done, () => window.prompt("Commande :", cmd));
+  } else {
+    window.prompt("Commande :", cmd);
+  }
 }
 
 function initControls() {
+  el("copy-tp").addEventListener("click", copyTpCommand);
   const sel = el("session-select");
   const groups = new Map();
   DATA.sessions.forEach((S, i) => {
@@ -979,11 +1037,13 @@ def main(argv: list[str] | None = None) -> int:
     if not args.db.exists():
         raise SystemExit(f"Base introuvable : {args.db}")
 
+    t0 = time.perf_counter()
     start_ts, end_ts = requested_time_window(args)
     df, worlds = load_breaks(args.db, start_ts=start_ts, end_ts=end_ts)
+    t_extract = time.perf_counter() - t0
     print(
         f"{len(df)} blocs casses par {df['pseudo'].nunique()} joueurs "
-        f"charges depuis {args.db.name}"
+        f"charges depuis {args.db.name} en {t_extract:.1f} s"
     )
 
     if start_ts is not None or end_ts is not None:
@@ -1011,11 +1071,15 @@ def main(argv: list[str] | None = None) -> int:
     if df.empty:
         raise SystemExit("Aucune session retenue avec ces seuils.")
 
+    t1 = time.perf_counter()
     payload = build_payload(df, worlds)
     write_html(payload, args.output)
+    t_render = time.perf_counter() - t1
 
     size_mb = args.output.stat().st_size / (1024 * 1024)
     print(f"Rendu ecrit : {args.output} ({size_mb:.1f} Mo)")
+    print(f"Temps : extraction {t_extract:.1f} s - analyse et rendu {t_render:.1f} s "
+          f"- total {time.perf_counter() - t0:.1f} s")
     return 0
 
 

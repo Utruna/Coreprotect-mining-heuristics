@@ -88,6 +88,7 @@ Trois familles, calculées par session pour le minerai cible choisi.
 | `target_per_100_dig` | Minerai cible pour 100 blocs **creusés** (NaN sous 30 blocs creusés, `MIN_DIG_BLOCKS_FOR_RATE`) | **Le** signal du x-ray : un rendement en creusant inexplicable par la chance |
 | `n_dig_blocks` / `dig_ratio` | Blocs creusés et leur part dans la session | Contexte : strip-mining (~1.0) ou exploration de grotte (faible) |
 | `walk_step_ratio` | Part des pas > 4 blocs | Indicateur bon marché de contexte grotte |
+| `path_straightness` | Vol d'oiseau début→fin ÷ chemin de la trajectoire simplifiée (un ancrage tous les 8 blocs, ce qui gomme le zigzag du geste de minage) | ≥ 0.65 = session « couloir » : creuser tout droit n'est pas viser |
 | `n_target_veins` / `n_dig_veins` | Filons distincts de la cible (Chebyshev ≤ 2) / dont atteints en creusant | Volume de découvertes et part « creusée » |
 | `mean_blocks_between_veins` | Blocs minés entre la fin d'un filon et le début du suivant | « Combien je creuse avant de trouver » |
 
@@ -114,7 +115,7 @@ Score 0-100 = moyenne pondérée de trois indicateurs, chacun normalisé par une
 
 Verdicts : **≥ 60** fortement suspect · **≥ 30** à surveiller · **< 30** RAS. Si un indicateur est incalculable (moins de 2 filons par exemple), il est retiré et les poids sont renormalisés.
 
-**Garde-fous de preuve** : un indicateur sans base suffisante est écarté (`detour_factor` sous 2 paires évaluées, `turn_toward_ore_rate` sous 5 virages, voir `EVIDENCE_REQUIREMENTS`), et si le poids total des indicateurs restants est sous 0.6 (`MIN_WEIGHT_SUM`), le score est plafonné à 59.9 : le rendement seul ne peut jamais produire « fortement suspect ». La colonne `evidence_weight` du CSV donne le poids effectivement utilisé, et le verdict `indeterminable` apparaît quand aucun indicateur n'est calculable (typiquement une session de grotte sans creusage).
+**Garde-fous de preuve** : un indicateur sans base suffisante est écarté (`detour_factor` sous 2 paires évaluées, `turn_toward_ore_rate` sous 5 virages, voir `EVIDENCE_REQUIREMENTS`). Dans une session **couloir** (`path_straightness` ≥ 0.65, `CORRIDOR_STRAIGHTNESS`), les deux indicateurs d'intentionnalité sont écartés d'office : le joueur n'a fait aucun choix de navigation, un détour de 1 et des « virages vers le filon » n'y prouvent rien — les filons se trouvaient sur la ligne (couloir de transport, escalier vers la profondeur). Si le poids total des indicateurs restants est sous 0.6 (`MIN_WEIGHT_SUM`), le score est plafonné à 59.9 : le rendement seul ne peut jamais produire « fortement suspect ». La colonne `evidence_weight` du CSV donne le poids effectivement utilisé, et le verdict `indeterminable` apparaît quand aucun indicateur n'est calculable (typiquement une session de grotte sans creusage).
 
 Les colonnes `ind_*` du CSV donnent la contribution normalisée de chaque indicateur : on voit *pourquoi* une session score haut, pas juste combien.
 

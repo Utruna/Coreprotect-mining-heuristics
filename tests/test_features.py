@@ -187,6 +187,53 @@ def test_cave_picker_is_not_flagged():
     assert result["verdict"] == "indeterminable"
 
 
+def test_corridor_session_is_capped():
+    # Long couloir diagonal en escalier (zigzag bloc a bloc) avec des diamants
+    # exposes ramasses au passage : aucune decision de navigation, les
+    # indicateurs d'intentionnalite ne doivent pas compter.
+    coords = []
+    x = z = 0
+    for i in range(120):
+        coords.append((x, 0, z))
+        if i % 2 == 0:
+            x += 1
+        else:
+            z += 1
+    diamonds = {20, 21, 60, 61, 100}
+    feats = compute_session_features(make_session(coords, diamonds))
+    assert feats["path_straightness"] > 0.65
+    result = score_session(feats)
+    assert math.isnan(result["ind_detour_factor"])
+    assert math.isnan(result["ind_turn_toward_ore_rate"])
+    assert result["score"] <= 59.9
+    assert result["verdict"] != "fortement suspect"
+
+
+def test_two_high_tunnel_is_a_corridor():
+    # Tunnel droit de 2 de haut : le geste alterne bas/haut (zigzag bloc a bloc)
+    # mais la galerie est une ligne droite -> rectitude macro elevee.
+    coords = []
+    for x in range(60):
+        coords += [(x, 0, 0), (x, 1, 0)]
+    diamonds = {30, 31, 90}
+    feats = compute_session_features(make_session(coords, diamonds))
+    assert feats["path_straightness"] > 0.65
+    result = score_session(feats)
+    assert math.isnan(result["ind_detour_factor"])
+    assert math.isnan(result["ind_turn_toward_ore_rate"])
+    assert result["score"] <= 59.9
+
+
+def test_quadrillage_is_not_a_corridor():
+    # Quadrillage : allers-retours paralleles, rectitude faible.
+    coords = []
+    for row in range(6):
+        xs = range(20) if row % 2 == 0 else range(19, -1, -1)
+        coords += [(xv, 0, row * 3) for xv in xs]
+    feats = compute_session_features(make_session(coords))
+    assert feats["path_straightness"] < 0.65
+
+
 def test_strip_miner_crossing_cave_keeps_dig_features():
     # Tunnel de 40 blocs (2 filons), traversee de grotte (20 blocs de marche),
     # second tunnel de 40 blocs (1 filon).

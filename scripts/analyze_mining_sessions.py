@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -222,10 +223,13 @@ def main(argv: list[str] | None = None) -> int:
     if start_ts or end_ts:
         print(f"Fenetre temporelle : {args.start or 'debut'} -> {args.end or 'fin'} (UTC)")
 
+    t0 = time.perf_counter()
     df, worlds = load_breaks(args.db, start_ts=start_ts, end_ts=end_ts)
+    t_extract = time.perf_counter() - t0
     if df.empty:
         raise SystemExit("Aucun bloc casse dans la fenetre demandee.")
-    print(f"{len(df)} blocs casses par {df['pseudo'].nunique()} joueurs charges depuis {args.db.name}")
+    print(f"{len(df)} blocs casses par {df['pseudo'].nunique()} joueurs "
+          f"charges depuis {args.db.name} en {t_extract:.1f} s")
 
     if args.anonymize:
         df, mapping = anonymize_players(df)
@@ -255,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.no_figure:
         build_figure(table, args.figure, target_label)
+    print(f"Temps : extraction {t_extract:.1f} s - total {time.perf_counter() - t0:.1f} s")
     return 0
 
 

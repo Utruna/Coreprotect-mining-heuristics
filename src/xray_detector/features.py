@@ -48,6 +48,15 @@ APPROACH_DIG_STEPS = 3
 # En dessous de MIN_DIG_BLOCKS_FOR_RATE blocs creuses, target_per_100_dig est
 # statistiquement instable -> NaN.
 MIN_DIG_BLOCKS_FOR_RATE = 30
+# Rectitude macro : vol d'oiseau / chemin de la trajectoire simplifiee (un point
+# d'ancrage tous les STRAIGHTNESS_STRIDE blocs), ce qui gomme le zigzag bloc a
+# bloc du geste de minage (tunnel 2 de haut, escalier) pour ne garder que la
+# forme de la galerie. Au-dela de CORRIDOR_STRAIGHTNESS, la session est un
+# couloir : le joueur n'a fait aucun choix de navigation, detour_factor et
+# turn_toward_ore_rate n'y portent aucun signal (couloir droit ou en escalier
+# ~0.95+, diagonal x/z ~0.71 ; quadrillage et x-ray slaloment bien plus bas).
+STRAIGHTNESS_STRIDE = 8
+CORRIDOR_STRAIGHTNESS = 0.65
 # Deux diamants a distance de Chebyshev <= 2 appartiennent au meme filon.
 VEIN_CHEBYSHEV = 2
 # Paires de filons a moins de MIN_VEIN_SPACING blocs : detour instable, ignorees.
@@ -239,6 +248,11 @@ def compute_session_features(seg: pd.DataFrame, target: str = "diamond") -> dict
     n_dig_blocks = int(dig_mask.sum())
     n_steps = len(dists)
     walk_step_ratio = float((dists > JUMP_DISTANCE).sum()) / n_steps if n_steps else math.nan
+    anchors = np.concatenate([pos[::STRAIGHTNESS_STRIDE], pos[-1:]])
+    macro_path = float(np.linalg.norm(np.diff(anchors, axis=0), axis=1).sum())
+    path_straightness = (
+        float(np.linalg.norm(pos[-1] - pos[0])) / macro_path if macro_path > 0 else math.nan
+    )
 
     h_runs = [ln for axis, ln in runs if axis != VERTICAL_AXIS]
     v_runs = [ln for axis, ln in runs if axis == VERTICAL_AXIS]
@@ -293,6 +307,7 @@ def compute_session_features(seg: pd.DataFrame, target: str = "diamond") -> dict
         "n_dig_blocks": n_dig_blocks,
         "dig_ratio": round(n_dig_blocks / n_blocks, 3) if n_blocks else math.nan,
         "walk_step_ratio": round(walk_step_ratio, 3) if not math.isnan(walk_step_ratio) else math.nan,
+        "path_straightness": round(path_straightness, 3) if not math.isnan(path_straightness) else math.nan,
         "ore_per_100": round(n_ores * per100, 2),
         "target_per_100": round(n_target * per100, 2),
         "target_per_100_dig": round(n_target_dig * per100_dig, 2) if not math.isnan(per100_dig) else math.nan,
@@ -321,13 +336,17 @@ def _ramp(value: float, low: float, high: float) -> float:
 def score_session(features: dict[str, float], target: str = "diamond") -> dict[str, float | str]:
     """Score de suspicion 0-100 (V1 heuristique) + contributions par indicateur.
 
-    Un indicateur sans preuve suffisante (EVIDENCE_REQUIREMENTS) est ecarte ; si
-    le poids total des indicateurs restants est sous MIN_WEIGHT_SUM, le score est
-    plafonne a PARTIAL_EVIDENCE_SCORE_CAP (jamais "fortement suspect" sur un seul
-    indicateur). `evidence_weight` expose le poids effectivement utilise.
+    Un indicateur sans preuve suffisante (EVIDENCE_REQUIREMENTS) est ecarte, de
+    meme que les indicateurs d'intentionnalite d'une session en couloir
+    (path_straightness >= CORRIDOR_STRAIGHTNESS : creuser tout droit n'est pas
+    viser). Si le poids total des indicateurs restants est sous MIN_WEIGHT_SUM,
+    le score est plafonne a PARTIAL_EVIDENCE_SCORE_CAP (jamais "fortement
+    suspect" sur un seul indicateur). `evidence_weight` expose le poids utilise.
     """
     total, weight_sum = 0.0, 0.0
     contributions: dict[str, float | str] = {}
+    straightness = features.get("path_straightness", math.nan)
+    is_corridor = not math.isnan(straightness) and straightness >= CORRIDOR_STRAIGHTNESS
     for name, (low, high, weight) in SCORE_RAMPS.items():
         if name == "target_per_100_dig":
             low, high = TARGET_RATE_RAMPS.get(target, DEFAULT_RATE_RAMP)
@@ -336,6 +355,10 @@ def score_session(features: dict[str, float], target: str = "diamond") -> dict[s
         if evidence is not None:
             count = features.get(evidence[0])
             if count is not None and count < evidence[1]:
+                value = math.nan
+            # Session en couloir : aucun choix de navigation, l'intentionnalite
+            # ne porte aucun signal (les filons se trouvaient sur la ligne).
+            if is_corridor:
                 value = math.nan
         indicator = _ramp(value, low, high)
         contributions[f"ind_{name}"] = round(indicator, 3) if not math.isnan(indicator) else math.nan
