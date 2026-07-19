@@ -57,6 +57,39 @@ ORE_FAMILIES: dict[str, str] = {
     "ancient_debris": "Debris antiques",
 }
 
+# Blocs typiques des cavernes / geodes / cavites naturelles, peu compatibles avec
+# l'hypothese d'un strip-mining en galerie reguliere. On s'en sert pour ecarter
+# les sessions qui ne sont pas dans le domaine d'analyse du score x-ray V1.
+CAVE_SIGNATURE_MATERIALS = {
+    "minecraft:calcite",
+    "minecraft:smooth_basalt",
+    "minecraft:moss_block",
+    "minecraft:clay",
+    "minecraft:sculk",
+    "minecraft:rooted_dirt",
+    "minecraft:short_grass",
+    "minecraft:tall_grass",
+    "minecraft:moss_carpet",
+    "minecraft:glow_lichen",
+    "minecraft:dripstone_block",
+    "minecraft:pointed_dripstone",
+    "minecraft:amethyst_block",
+    "minecraft:budding_amethyst",
+    "minecraft:amethyst_cluster",
+    "minecraft:spore_blossom",
+    "minecraft:cave_vines",
+    "minecraft:cave_vines_plant",
+    "minecraft:big_dripleaf",
+    "minecraft:small_dripleaf",
+    "minecraft:weeping_vines",
+    "minecraft:twisting_vines",
+}
+
+# Seuils choisis pour filtrer les sessions qui ressemblent fortement a de la
+# cavitation naturelle. Le ratio garde le filtre robuste sur les longues sessions.
+CAVE_SIGNATURE_MIN_BLOCKS = 10
+CAVE_SIGNATURE_MIN_RATIO = 0.015
+
 
 def ore_family(material: str) -> str | None:
     """Rabat un materiau sur sa famille de minerai, ou None si ce n'est pas un minerai."""
@@ -69,6 +102,48 @@ def ore_family(material: str) -> str | None:
     for prefix in ("deepslate_", "nether_"):
         name = name.removeprefix(prefix)
     return name if name in ORE_FAMILIES else None
+
+
+def cave_signature_count(seg: pd.DataFrame) -> int:
+    """Compte les blocs signatures d'un environnement naturel (grotte, geode, etc.)."""
+    return int(seg["material"].isin(CAVE_SIGNATURE_MATERIALS).sum())
+
+
+def is_cave_like_session(
+    seg: pd.DataFrame,
+    min_signature_blocks: int = CAVE_SIGNATURE_MIN_BLOCKS,
+    min_signature_ratio: float = CAVE_SIGNATURE_MIN_RATIO,
+) -> bool:
+    """Detecte les sessions qui sortent du cadre strip-mining de l'analyse x-ray."""
+    if seg.empty:
+        return False
+    signature_blocks = cave_signature_count(seg)
+    return signature_blocks >= min_signature_blocks or (
+        signature_blocks / len(seg)
+    ) >= min_signature_ratio
+
+
+def filter_cave_like_sessions(
+    df: pd.DataFrame,
+    min_signature_blocks: int = CAVE_SIGNATURE_MIN_BLOCKS,
+    min_signature_ratio: float = CAVE_SIGNATURE_MIN_RATIO,
+) -> tuple[pd.DataFrame, int]:
+    """Ecarte les sessions qui ressemblent a des cavernes / geodes naturelles."""
+    if df.empty:
+        return df.copy(), 0
+
+    keep = pd.Series(True, index=df.index)
+    excluded = 0
+    for _, seg in df.groupby(["pseudo", "wid", "session_id"], sort=False):
+        if is_cave_like_session(
+            seg,
+            min_signature_blocks=min_signature_blocks,
+            min_signature_ratio=min_signature_ratio,
+        ):
+            keep.loc[seg.index] = False
+            excluded += 1
+
+    return df.loc[keep].copy(), excluded
 
 
 def _build_extraction_sql(start_ts: int | None = None, end_ts: int | None = None) -> tuple[str, dict[str, int]]:

@@ -23,6 +23,7 @@ from xray_detector.features import compute_session_features, score_session
 from xray_detector.mining import (
     ORE_FAMILIES,
     anonymize_players,
+    filter_cave_like_sessions,
     load_breaks,
     segment_sessions,
 )
@@ -183,6 +184,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Ne pas generer la figure comparative.")
     parser.add_argument("--anonymize", action="store_true",
                         help="Remplace les pseudos par des pseudos inventes (partage public).")
+    parser.add_argument(
+        "--include-cave-sessions",
+        action="store_true",
+        help="Garde aussi les sessions qui ressemblent a des cavernes / geodes naturelles.",
+    )
     args = parser.parse_args(argv)
     suffix = "_anon" if args.anonymize else ""
     if args.output is None:
@@ -210,6 +216,10 @@ def main(argv: list[str] | None = None) -> int:
     df, dropped = segment_sessions(df, gap_seconds=args.gap, min_blocks=args.min_blocks)
     if dropped:
         print(f"Sessions ignorees (< {args.min_blocks} blocs) : {dropped}")
+    if not args.include_cave_sessions:
+        df, cave_dropped = filter_cave_like_sessions(df)
+        if cave_dropped:
+            print(f"Sessions exclues car ressemblant a des grottes/geodes : {cave_dropped}")
     if df.empty:
         raise SystemExit("Aucune session retenue avec ces seuils.")
 

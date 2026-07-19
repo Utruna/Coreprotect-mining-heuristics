@@ -27,9 +27,9 @@ Minerai surveille : diamant (diamond)
 
 --- Features et score par session (trie par score decroissant) ---
        pseudo  n_blocks  ...  score           verdict
-IxLikexYoou44      6617  ...   67.2 fortement suspect
-     acsterix      3343  ...   59.7      a surveiller
-       Utruna      3197  ...   18.8               RAS
+Joueur 1      6617  ...   67.2 fortement suspect
+     JHoueur 2      3343  ...   59.7      a surveiller
+       Joueur 3      3197  ...   18.8               RAS
 
 Tableau complet ecrit : data\processed\session_features_diamond.csv
 Figure ecrite : reports\figures\session_features_diamond.png
@@ -60,8 +60,9 @@ Le choix du minerai change la cible des features de filons (rendement, détour, 
 
 1. **Extraction** ([src/xray_detector/mining.py](src/xray_detector/mining.py)) — blocs cassés (`action = 0`) par les vrais joueurs uniquement (uuid non nul, ce qui exclut `#lava`, `#gravity`…), en ignorant les blocs que le joueur avait lui-même posés. Tous les matériaux sont gardés : la roche décrit le chemin, les minerais sont la cible.
 2. **Segmentation en sessions** — coupure par joueur et par monde dès qu'un trou d'inactivité dépasse `--gap` secondes ; les micro-sessions sous `--min-blocks` blocs sont écartées.
-3. **Reconstitution de la trajectoire** ([src/xray_detector/features.py](src/xray_detector/features.py)) — la session est lue comme une suite de positions, de bloc cassé en bloc cassé. Un pas de plus de 4 blocs (`JUMP_DISTANCE`) est un déplacement sans minage (marche en grotte, chute, téléportation) : il coupe la continuité directionnelle mais ne compte pas comme un virage.
-4. **Features puis score** — détail ci-dessous.
+3. **Filtre d'environnement** — les sessions qui ressemblent à des cavernes / géodes naturelles sont exclues par défaut des sorties d'analyse et de la preview 3D, car elles ne relèvent pas du strip-mining que le score x-ray V1 cherche à comparer. L'option `--include-cave-sessions` permet de les réinclure pour inspection manuelle.
+4. **Reconstitution de la trajectoire** ([src/xray_detector/features.py](src/xray_detector/features.py)) — la session est lue comme une suite de positions, de bloc cassé en bloc cassé. Un pas de plus de 4 blocs (`JUMP_DISTANCE`) est un déplacement sans minage (marche en grotte, chute, téléportation) : il coupe la continuité directionnelle mais ne compte pas comme un virage.
+5. **Features puis score** — détail ci-dessous.
 
 ## Les features
 
@@ -113,9 +114,9 @@ Les colonnes `ind_*` du CSV donnent la contribution normalisée de chaque indica
 
 | Joueur | Comportement réel | `target_per_100` | `detour_factor` | `turn_toward_ore_rate` | Score | Verdict |
 |---|---|---|---|---|---|---|
-| IxLikexYoou44 | X-ray simulé | 5.83 | 2.51 | 0.71 | **67.2** | fortement suspect |
-| acsterix | X-ray simulé | 5.12 | 2.70 | 0.66 | **59.7** | à surveiller |
-| Utruna | Strip-mining légitime | 1.50 | 9.76 | 0.57 | **18.8** | RAS |
+| Joueur 1 | X-ray simulé | 5.83 | 2.51 | 0.71 | **67.2** | fortement suspect |
+| Joueur 2 | X-ray simulé | 5.12 | 2.70 | 0.66 | **59.7** | à surveiller |
+| Joueur 3 | Strip-mining légitime | 1.50 | 9.76 | 0.57 | **18.8** | RAS |
 
 Le classement est correct et l'écart net entre les deux profils. À noter :
 

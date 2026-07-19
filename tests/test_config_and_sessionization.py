@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime
 
 from xray_detector.config import load_config
-from xray_detector.mining import segment_sessions
+from xray_detector.mining import filter_cave_like_sessions, is_cave_like_session, segment_sessions
 from xray_detector.sessionization import split_sessions
 
 
@@ -112,3 +112,40 @@ def test_segment_sessions_splits_on_combined_gap():
 
     assert dropped == 0
     assert segmented["session_id"].tolist() == [0, 0, 1]
+
+
+def test_cave_like_session_filter_detects_natural_cavities():
+    cave_seg = pd.DataFrame(
+        {
+            "time": [0, 1, 2, 3, 4, 5],
+            "pseudo": ["alice"] * 6,
+            "wid": [1] * 6,
+            "session_id": [0] * 6,
+            "material": [
+                "minecraft:stone",
+                "minecraft:calcite",
+                "minecraft:smooth_basalt",
+                "minecraft:stone",
+                "minecraft:moss_block",
+                "minecraft:diamond_ore",
+            ],
+        }
+    )
+    tunnel_seg = pd.DataFrame(
+        {
+            "time": [0, 1, 2, 3, 4, 5],
+            "pseudo": ["alice"] * 6,
+            "wid": [1] * 6,
+            "session_id": [1] * 6,
+            "material": ["minecraft:stone", "minecraft:deepslate"] * 3,
+        }
+    )
+    df = pd.concat([cave_seg, tunnel_seg], ignore_index=True)
+
+    assert is_cave_like_session(cave_seg)
+    assert not is_cave_like_session(tunnel_seg)
+
+    kept, excluded = filter_cave_like_sessions(df)
+
+    assert excluded == 1
+    assert kept["session_id"].tolist() == [1, 1, 1, 1, 1, 1]
