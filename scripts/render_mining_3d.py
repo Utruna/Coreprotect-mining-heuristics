@@ -867,7 +867,7 @@ function renderLocation(S) {
 function copyTpCommand() {
   const S = DATA.sessions[state.i];
   const p = tpTarget(S);
-  const cmd = "/tp @s " + p.x + " " + p.y + " " + p.z;
+  const cmd = "/tppos @p " + p.x + " " + p.y + " " + p.z;
   const done = () => {
     const btn = el("copy-tp");
     btn.classList.add("copied");

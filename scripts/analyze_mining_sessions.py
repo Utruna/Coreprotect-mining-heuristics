@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from xray_detector.anomaly_model import load_model, score_anomalies
 from xray_detector.features import compute_session_features, score_session
 from xray_detector.mining import (
     ORE_FAMILIES,
@@ -34,6 +35,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = PROJECT_ROOT / "data" / "raw" / "database_testserv.db"
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 FIGURES_DIR = PROJECT_ROOT / "reports" / "figures"
+MODELS_DIR = PROJECT_ROOT / "data" / "models"
 
 # Couleurs categoriellles par joueur (slots dark de la palette de reference dataviz,
 # validees sur le fond #14171c : bande de luminance, chroma, daltonisme, contraste).
@@ -82,6 +84,29 @@ def analyze(df: pd.DataFrame, worlds: dict[int, str], target: str) -> pd.DataFra
     return pd.DataFrame(rows).sort_values("score", ascending=False).reset_index(drop=True)
 
 
+def add_anomaly_scores(table: pd.DataFrame, model_path: Path, target: str) -> pd.DataFrame:
+    """Ajoute anomaly_score & co si un modele entraine est disponible.
+
+    Le modele (Isolation Forest, scripts/train_anomaly_model.py) complete le score
+    heuristique V1, il ne le remplace pas : les deux colonnes coexistent pour
+    comparaison. Sans modele (ou modele d'un autre minerai), l'analyse V1 sort
+    inchangee.
+    """
+    if not model_path.exists():
+        print(f"Pas de modele d'anomalie ({model_path}) : colonnes anomaly_* omises. "
+              "Entrainement : scripts/train_anomaly_model.py")
+        return table
+    model = load_model(model_path)
+    if model.target != target:
+        print(f"Modele d'anomalie entraine pour '{model.target}', cible demandee "
+              f"'{target}' : colonnes anomaly_* omises.")
+        return table
+    print(f"Modele d'anomalie : {model_path.name} "
+          f"({model.n_train_sessions} sessions d'entrainement, "
+          f"contamination {model.contamination})")
+    return pd.concat([table, score_anomalies(model, table)], axis=1)
+
+
 def print_report(table: pd.DataFrame) -> None:
     display_cols = [
         "pseudo", "n_blocks", "n_dig_blocks", "dig_ratio", "duration_min",
@@ -89,6 +114,8 @@ def print_report(table: pd.DataFrame) -> None:
         "mean_blocks_between_veins", "detour_factor", "turn_toward_ore_rate",
         "changes_per_100", "score", "verdict",
     ]
+    if "anomaly_score" in table.columns:
+        display_cols += ["anomaly_score", "anomaly_top_feature"]
     print("\n--- Features et score par session (trie par score decroissant) ---")
     print(table[display_cols].to_string(index=False))
 
@@ -196,6 +223,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Ne pas generer la figure comparative.")
     parser.add_argument("--anonymize", action="store_true",
                         help="Remplace les pseudos par des pseudos inventes (partage public).")
+    parser.add_argument("--anomaly-model", type=Path, default=None,
+                        help="Modele d'anomalie joblib (defaut : "
+                             "data/models/anomaly_iforest_<ore>.joblib si present).")
     parser.add_argument(
         "--include-cave-sessions",
         action="store_true",
@@ -207,6 +237,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.output = PROCESSED_DIR / f"session_features_{args.ore}{suffix}.csv"
     if args.figure is None:
         args.figure = FIGURES_DIR / f"session_features_{args.ore}{suffix}.png"
+    if args.anomaly_model is None:
+        args.anomaly_model = MODELS_DIR / f"anomaly_iforest_{args.ore}.joblib"
     return args
 
 
@@ -251,6 +283,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Minerai surveille : {target_label.lower()} ({args.ore})")
 
     table = analyze(df, worlds, target=args.ore)
+    table = add_anomaly_scores(table, args.anomaly_model, target=args.ore)
     print_report(table)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

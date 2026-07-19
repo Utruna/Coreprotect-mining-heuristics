@@ -49,6 +49,7 @@ Figure ecrite : reports\figures\session_features_diamond.png
 | `--figure` | `reports/figures/session_features_<ore>.png` | Figure comparative PNG |
 | `--no-figure` | — | Ne pas générer la figure |
 | `--anonymize` | — | Pseudos inventés dans toutes les sorties (suffixe `_anon`), mapping affiché en console uniquement |
+| `--anomaly-model` | `data/models/anomaly_iforest_<ore>.joblib` | Modèle d'anomalie à charger pour les colonnes `anomaly_*` (omises si le fichier n'existe pas — voir section Isolation Forest) |
 
 Exemple : surveiller l'or plutôt que le diamant, avec une segmentation plus fine :
 
@@ -119,7 +120,7 @@ Verdicts : **≥ 60** fortement suspect · **≥ 30** à surveiller · **< 30** 
 
 Les colonnes `ind_*` du CSV donnent la contribution normalisée de chaque indicateur : on voit *pourquoi* une session score haut, pas juste combien.
 
-**Assumé :** c'est une heuristique calibrée sur la connaissance du jeu (rendement d'un strip-mineur à Y-59, géométrie d'un quadrillage…), pas un modèle appris. Elle sert de base de comparaison et d'étiqueteur grossier en attendant un corpus suffisant pour entraîner un vrai classifieur (scikit-learn est déjà dans les dépendances).
+**Assumé :** c'est une heuristique calibrée sur la connaissance du jeu (rendement d'un strip-mineur à Y-59, géométrie d'un quadrillage…), pas un modèle appris. Elle sert de base de comparaison et d'étiqueteur grossier en attendant un corpus suffisant pour entraîner un vrai classifieur. Un premier modèle non supervisé la complète depuis le Jour 4 (section suivante) — il ne la remplace pas.
 
 ## Résultats sur la base test (vérité terrain connue)
 
@@ -136,6 +137,48 @@ Le classement est correct et l'écart net entre les deux profils. À noter :
 - Le **rendement** discrimine très bien ; le **détour** s'est resserré depuis que les paires traversées par un pas de marche sont exclues (le quadrillage légitime perdait surtout ses paires longues), à recalibrer sur données réelles.
 - `mean_run_h` (~1.1 bloc pour tout le monde) et `changes_per_100` (~85 partout) ne discriminent **pas** en l'état : le minage en tunnel de 2 de haut alterne un pas avant / un pas vertical, ce qui écrase la macro-structure du chemin. Voir limites ci-dessous.
 
+## Détection d'anomalies non supervisée (Isolation Forest)
+
+Depuis le Jour 4, un second regard **complète** le score heuristique : un Isolation Forest ([src/xray_detector/anomaly_model.py](src/xray_detector/anomaly_model.py)) entraîné sans étiquettes sur les sessions de la vraie base. Là où le score V1 encode une connaissance du jeu (rampes calibrées à la main sur 3 indicateurs), le modèle apprend ce qu'est une session *typique* du corpus et mesure l'écart — sur 13 features à la fois, y compris celles que le score V1 n'utilise pas. Les deux colonnes coexistent dans toutes les sorties (`score`/`verdict` et `anomaly_score`) : c'est la confrontation des deux qui est informative, pas l'une ou l'autre seule.
+
+### Entraînement et scoring
+
+```powershell
+# Entraîner depuis un CSV de features déjà produit (voie normale pour la grosse base)…
+.venv\Scripts\python.exe scripts\train_anomaly_model.py --from-csv data\processed\session_features_diamond_anon.csv
+
+# …ou en rejouant tout le pipeline sur une base (fenêtre poussée dans le SQL)
+.venv\Scripts\python.exe scripts\train_anomaly_model.py --db data\raw\CoreProtect\database.db --start 2026-06-01 --end 2026-06-30
+```
+
+Le modèle est écrit dans `data/models/anomaly_iforest_<ore>.joblib` (un modèle par minerai cible) et `scripts/analyze_mining_sessions.py` le charge automatiquement s'il existe : le tableau, le CSV et la console gagnent `anomaly_raw` (decision_function sklearn), `anomaly_score` (0-100), `anomaly_top_feature` et `anomaly_top_delta`. L'entraînement refuse un corpus de moins de 30 sessions : sur une poignée de points, l'Isolation Forest isole d'abord *le point seul de son côté* — sur la base de test, ce serait le joueur légitime.
+
+### Choix de conception
+
+- **Isolation Forest plutôt que LOF** : pas de choix de `k` voisins ni de métrique de distance à justifier (avec 13 features hétérogènes, une distance euclidienne mélange des blocs, des taux et des ratios), insensible à l'échelle des features (coupes par feature), score exploitable hors échantillon pour scorer de nouvelles sessions sans réentraîner — LOF en mode `novelty` le permet aussi mais reste sensible à la densité locale, mal définie sur quelques centaines de points.
+- **Features** : les 13 features de forme / rendement / intentionnalité invariantes à la taille de session (voir `ANOMALY_FEATURES`). Exclues : `n_blocks`, `duration_min`, `blocks_per_min` (taille et vitesse ne sont pas des signaux de x-ray), les comptages `n_*` (corrélés à la longueur), et tout ce qui sort du score V1 (`score`, `ind_*`) — le modèle reste indépendant de l'heuristique pour que la comparaison ait un sens. Entraînement uniquement sur des sessions ayant passé le filtre grotte/géode, pour ne pas réapprendre les faux positifs déjà réglés en amont.
+- **Directionnalité** : un Isolation Forest brut est non-directionnel — première leçon de la vérité terrain : la longue session patiente du joueur légitime (200 blocs creusés entre deux filons, un record de malchance) sortait *plus atypique qu'un tricheur*. Pour les 6 features de rendement / intentionnalité dont la direction suspecte est connue (`SUSPICIOUS_DIRECTION`), le côté « légitime » est donc écrêté à la médiane du corpus : être très malchanceux ou très quadrilleur ne rend plus atypique. Les features de forme, sans direction évidente, restent bilatérales.
+- **NaN** : imputation par la **médiane du corpus d'entraînement**. Un NaN signifie « pas assez de preuve » (rendement sous 30 blocs creusés, indicateurs d'intentionnalité écartés) ; la médiane est la valeur neutre du corpus, donc une session incomplète ne peut pas devenir anormale *à cause de ses trous* — vérifié par un test dédié. L'alternative (exclure les sessions incomplètes) jetait une part importante du corpus pour des NaN très fréquents sur `detour_factor`.
+- **Normalisation 0-100** : `anomaly_score` est ancré sur la decision_function — **50 = seuil de contamination** ([0, max du corpus] → [50, 0] et [min du corpus, 0] → [100, 50], borné aux extrêmes du corpus d'entraînement). Un score ≥ 50 se lit « plus atypique que (1 − contamination) du corpus », pas « probabilité de triche ».
+- **`contamination` = 0.05 par défaut** : part de sessions supposées atypiques dans le corpus. Sans vérité terrain, ce n'est **pas calibrable** — c'est un hyperparamètre documenté qui déplace le « 50 » du score, pas la qualité du classement (le rang des sessions n'en dépend pas).
+- **Explication** : `anomaly_top_feature` est la feature dont le remplacement par la médiane du corpus rapproche le plus la session de la normale (perturbation une-feature-à-la-fois), même esprit que les colonnes `ind_*` du score V1 : on voit *pourquoi*, pas juste combien.
+
+### Ce que ça donne
+
+**Sur la vérité terrain** (modèle entraîné sur 413 sessions de la vraie base, jamais vues) :
+
+| Joueur | Comportement réel | Score V1 | `anomaly_score` | `anomaly_top_feature` |
+|---|---|---|---|---|
+| Joueur 1 (2 sessions) | X-ray simulé | 64.7 / 59.5 | **66.1 / 60.9** | detour_factor, target_per_100_dig |
+| Joueur 2 | X-ray simulé | 54.9 | **49.5** | target_per_100 |
+| Joueur 3 | Strip-mining légitime | 24.9 | **42.0** | detour_factor |
+
+Le classement est le bon et les deux x-rayeurs passent devant, mais la marge est plus mince qu'avec le score V1 (49.5 vs 42.0 pour le cas le plus serré) : le joueur légitime de la base de test est un mineur *efficace* pour le corpus réel (détour sous la médiane), et le modèle n'a aucun moyen de le savoir innocent. C'est le comportement attendu d'un détecteur d'écart, pas un défaut à sur-corriger. Le test [tests/test_anomaly_model.py](tests/test_anomaly_model.py) verrouille cette séparation (et saute proprement si la base ou le modèle manquent).
+
+**Sur les sessions de la vraie base** (le corpus lui-même, contrôle de cohérence affiché par le script d'entraînement) : corrélation de rang de 0.43 avec le score V1 — assez corrélé pour se conforter, assez décorrélé pour apporter autre chose. 8 des 10 sessions les plus atypiques sont « à surveiller » ou « fortement suspect » au score V1 ; les 2 restantes sont atypiques par la **forme** (`mean_run_v`, `mean_blocks_between_veins`), des features que le score V1 n'exploite pas — exactement le genre de session qu'un humain doit aller regarder dans la preview 3D, et un rappel qu'**atypique ≠ tricheur**.
+
+**Limites, sans détour** : aucun chiffre de précision/rappel n'est annonçable — il n'y a pas d'étiquettes, et le corpus d'entraînement contient lui-même des tricheurs éventuels (c'est le rôle de `contamination` de l'encaisser). Le modèle dit « cette session ne ressemble pas au corpus », rien de plus ; le verdict reste celui du score V1 plus l'inspection visuelle.
+
 ## Limites connues et pistes
 
 - **Micro-structure vs macro-structure** : les longueurs de segments droits mesurent le geste de minage (tunnel 2 de haut), pas la forme de la galerie. Amélioration prévue : simplifier la trajectoire avant mesure (fusion des paires verticales, ou simplification type Douglas-Peucker), ce qui devrait faire ressortir la grille du strip-mineur face aux vers de terre du x-rayeur.
@@ -146,13 +189,13 @@ Le classement est correct et l'écart net entre les deux profils. À noter :
 
 ## Sorties
 
-- **CSV** (`data/processed/session_features_<ore>.csv`) : une ligne par session — identification (`pseudo`, `world`, `session`, `target`), toutes les features, contributions `ind_*`, `score`, `verdict`.
+- **CSV** (`data/processed/session_features_<ore>.csv`) : une ligne par session — identification (`pseudo`, `world`, `session`, `target`), toutes les features, contributions `ind_*`, `score`, `verdict`, et si un modèle d'anomalie est présent : `anomaly_raw`, `anomaly_score`, `anomaly_top_feature`, `anomaly_top_delta`.
 - **Figure** (`reports/figures/session_features_<ore>.png`) : 6 panneaux de features (une barre par session, couleur stable par joueur, lignes pointillées = références « ligne droite » et « hasard ») + panneau du score coloré par verdict (rouge / ambre / vert).
 - **Console** : tableau trié par score décroissant.
 
 ## Tests
 
-Les briques de calcul sont couvertes par [tests/test_features.py](tests/test_features.py) sur des chemins synthétiques : tunnel droit, virage en L, escalier vertical, saut de continuité, regroupement en filons, détour, virage vers un filon caché, séparation des profils par le score, bornes par minerai.
+Les briques de calcul sont couvertes par [tests/test_features.py](tests/test_features.py) sur des chemins synthétiques : tunnel droit, virage en L, escalier vertical, saut de continuité, regroupement en filons, détour, virage vers un filon caché, séparation des profils par le score, bornes par minerai. Le modèle d'anomalie est couvert par [tests/test_anomaly_model.py](tests/test_anomaly_model.py) : mécanique sur corpus synthétique (bornes, NaN neutres, garde-fou directionnel, sauvegarde/rechargement) et séparation sur la vérité terrain avec le modèle réellement entraîné.
 
 ```powershell
 .venv\Scripts\python.exe -m pytest tests\ -q
