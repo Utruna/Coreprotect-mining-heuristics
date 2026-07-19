@@ -1,10 +1,23 @@
 import pandas as pd
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from xray_detector.config import load_config
-from xray_detector.mining import filter_cave_like_sessions, is_cave_like_session, segment_sessions
+from xray_detector.mining import (
+    filter_cave_like_sessions,
+    is_cave_like_session,
+    parse_utc_datetime,
+    segment_sessions,
+)
 from xray_detector.sessionization import split_sessions
+
+
+def test_parse_utc_datetime_accepts_common_forms():
+    expected = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    assert parse_utc_datetime("2026-06-01") == expected
+    assert parse_utc_datetime("2026-6-1") == expected
+    assert parse_utc_datetime("2026-06-1T00:00:00Z") == expected
+    assert parse_utc_datetime("2026-06-01T02:00:00+02:00") == expected
 
 
 def test_load_config_uses_workspace_paths(tmp_path):

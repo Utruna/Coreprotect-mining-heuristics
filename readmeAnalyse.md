@@ -22,14 +22,15 @@ Sortie attendue :
 
 ```
 13171 blocs casses par 3 joueurs charges depuis database_testserv.db
-Sessions ignorees (< 50 blocs) : 2
+Sessions ignorees (< 50 blocs) : 6
+Sessions exclues car ressemblant a des grottes/geodes : 4
 Minerai surveille : diamant (diamond)
 
 --- Features et score par session (trie par score decroissant) ---
-       pseudo  n_blocks  ...  score           verdict
-Joueur 1      6617  ...   67.2 fortement suspect
-     JHoueur 2      3343  ...   59.7      a surveiller
-       Joueur 3      3197  ...   18.8               RAS
+  pseudo  n_blocks  n_dig_blocks  dig_ratio  ...  score           verdict
+Joueur 1       887           878      0.990  ...   64.7 fortement suspect
+Joueur 2       371           366      0.987  ...   54.9      a surveiller
+Joueur 3      2964          2830      0.955  ...   24.9               RAS
 
 Tableau complet ecrit : data\processed\session_features_diamond.csv
 Figure ecrite : reports\figures\session_features_diamond.png
@@ -40,6 +41,7 @@ Figure ecrite : reports\figures\session_features_diamond.png
 | Option | Défaut | Rôle |
 |---|---|---|
 | `--db` | `data/raw/database_testserv.db` | Base CoreProtect SQLite à analyser |
+| `--start` / `--end` | toute la base | Fenêtre temporelle UTC (`2026-06-01` ou `2026-06-01T00:00:00Z`, fin incluse). Le filtre est poussé dans le SQL avant chargement — indispensable sur une grosse base |
 | `--gap` | `300` | Trou d'inactivité (secondes) qui coupe une session en deux |
 | `--min-blocks` | `50` | Nombre minimal de blocs cassés pour garder une session |
 | `--ore` | `diamond` | Minerai surveillé : `diamond`, `gold`, `iron`, `copper`, `emerald`, `redstone`, `lapis`, `coal`, `quartz`, `ancient_debris` |
@@ -62,7 +64,8 @@ Le choix du minerai change la cible des features de filons (rendement, détour, 
 2. **Segmentation en sessions** — coupure par joueur et par monde dès qu'un trou d'inactivité dépasse `--gap` secondes ; les micro-sessions sous `--min-blocks` blocs sont écartées.
 3. **Filtre d'environnement** — les sessions qui ressemblent à des cavernes / géodes naturelles sont exclues par défaut des sorties d'analyse et de la preview 3D, car elles ne relèvent pas du strip-mining que le score x-ray V1 cherche à comparer. L'option `--include-cave-sessions` permet de les réinclure pour inspection manuelle.
 4. **Reconstitution de la trajectoire** ([src/xray_detector/features.py](src/xray_detector/features.py)) — la session est lue comme une suite de positions, de bloc cassé en bloc cassé. Un pas de plus de 4 blocs (`JUMP_DISTANCE`) est un déplacement sans minage (marche en grotte, chute, téléportation) : il coupe la continuité directionnelle mais ne compte pas comme un virage.
-5. **Features puis score** — détail ci-dessous.
+5. **Classement creusage / marche** — chaque casse est classée en phase de *creusage* (pas ≤ 2 blocs entre casses consécutives, `DIG_STEP_DISTANCE`, sur au moins 4 casses enchaînées, `DIG_PHASE_MIN_BLOCKS`) ou de *marche*. En strip-mining le joueur creuse son chemin (~1 bloc par pas) ; en grotte il marche dans l'air entre les minerais exposés. Le rendement du score n'est calculé que sur les blocs creusés, et un filon ne porte le signal d'intentionnalité que s'il a été **atteint en creusant** (les 3 pas précédents sont du creusage, `APPROACH_DIG_STEPS`) : marcher droit vers un minerai qu'on *voit* en grotte n'est pas une fuite d'information.
+6. **Features puis score** — détail ci-dessous.
 
 ## Les features
 
@@ -81,8 +84,11 @@ Trois familles, calculées par session pour le minerai cible choisi.
 | Feature | Calcul | Ce qu'elle raconte |
 |---|---|---|
 | `ore_per_100` | Minerais (toutes familles) pour 100 blocs cassés | Rendement global |
-| `target_per_100` | Minerai cible pour 100 blocs cassés | **Le** signal brut du x-ray : un rendement inexplicable par la chance |
-| `n_target_veins` | Nombre de filons distincts de la cible (regroupement des casses à distance de Chebyshev ≤ 2) | Volume de découvertes |
+| `target_per_100` | Minerai cible pour 100 blocs cassés (session entière) | Rendement brut, gardé pour comparaison — gonflé mécaniquement en grotte |
+| `target_per_100_dig` | Minerai cible pour 100 blocs **creusés** (NaN sous 30 blocs creusés, `MIN_DIG_BLOCKS_FOR_RATE`) | **Le** signal du x-ray : un rendement en creusant inexplicable par la chance |
+| `n_dig_blocks` / `dig_ratio` | Blocs creusés et leur part dans la session | Contexte : strip-mining (~1.0) ou exploration de grotte (faible) |
+| `walk_step_ratio` | Part des pas > 4 blocs | Indicateur bon marché de contexte grotte |
+| `n_target_veins` / `n_dig_veins` | Filons distincts de la cible (Chebyshev ≤ 2) / dont atteints en creusant | Volume de découvertes et part « creusée » |
 | `mean_blocks_between_veins` | Blocs minés entre la fin d'un filon et le début du suivant | « Combien je creuse avant de trouver » |
 
 ### Intentionnalité
@@ -91,8 +97,10 @@ C'est la famille la plus discriminante : elle mesure si le joueur *sait où il v
 
 | Feature | Calcul | Ce qu'elle raconte |
 |---|---|---|
-| `detour_factor` | Longueur du chemin miné entre deux filons successifs ÷ distance à vol d'oiseau (moyenne sur les paires ; paires < 3 blocs ou avec téléportation exclues) | 1.0 = ligne parfaitement droite de filon en filon. Un joueur légitime quadrille : ≥ 3 |
-| `turn_toward_ore_rate` | À chaque virage, la nouvelle direction rapproche-t-elle du prochain filon **pas encore découvert** ? (taux sur tous les virages évaluables) | Un virage aléatoire rapproche ~1 fois sur 2. Viser juste presque à chaque virage trahit une information que le joueur ne devrait pas avoir |
+| `detour_factor` | Longueur du chemin miné entre deux filons successifs **atteints en creusant** ÷ distance à vol d'oiseau (moyenne sur les paires ; paires < 3 blocs ou traversées par un pas de marche > 4 blocs exclues) | 1.0 = ligne parfaitement droite de filon en filon. Un joueur légitime quadrille : ≥ 3 |
+| `turn_toward_ore_rate` | À chaque virage, la nouvelle direction rapproche-t-elle du prochain filon **creusé, pas encore découvert** ? (taux sur tous les virages évaluables) | Un virage aléatoire rapproche ~1 fois sur 2. Viser juste presque à chaque virage trahit une information que le joueur ne devrait pas avoir |
+
+`n_detour_pairs` et `n_turns_evaluated` exposent la base de preuve de chaque indicateur (utilisés par le garde-fou du score, ci-dessous).
 
 ## Le score V1
 
@@ -100,11 +108,13 @@ Score 0-100 = moyenne pondérée de trois indicateurs, chacun normalisé par une
 
 | Indicateur | Bornes (diamant) | Poids |
 |---|---|---|
-| `target_per_100` | 0.8 → 3.0 (bornes par minerai, voir `TARGET_RATE_RAMPS`) | 0.4 |
+| `target_per_100_dig` | 0.8 → 3.0 (bornes par minerai, voir `TARGET_RATE_RAMPS`) | 0.4 |
 | `detour_factor` | 3.0 → 1.4 (inversées : petit détour = suspect) | 0.3 |
 | `turn_toward_ore_rate` | 0.5 → 0.85 | 0.3 |
 
 Verdicts : **≥ 60** fortement suspect · **≥ 30** à surveiller · **< 30** RAS. Si un indicateur est incalculable (moins de 2 filons par exemple), il est retiré et les poids sont renormalisés.
+
+**Garde-fous de preuve** : un indicateur sans base suffisante est écarté (`detour_factor` sous 2 paires évaluées, `turn_toward_ore_rate` sous 5 virages, voir `EVIDENCE_REQUIREMENTS`), et si le poids total des indicateurs restants est sous 0.6 (`MIN_WEIGHT_SUM`), le score est plafonné à 59.9 : le rendement seul ne peut jamais produire « fortement suspect ». La colonne `evidence_weight` du CSV donne le poids effectivement utilisé, et le verdict `indeterminable` apparaît quand aucun indicateur n'est calculable (typiquement une session de grotte sans creusage).
 
 Les colonnes `ind_*` du CSV donnent la contribution normalisée de chaque indicateur : on voit *pourquoi* une session score haut, pas juste combien.
 
@@ -112,15 +122,17 @@ Les colonnes `ind_*` du CSV donnent la contribution normalisée de chaque indica
 
 ## Résultats sur la base test (vérité terrain connue)
 
-| Joueur | Comportement réel | `target_per_100` | `detour_factor` | `turn_toward_ore_rate` | Score | Verdict |
+Meilleure session par joueur (pipeline complet avec classement creusage/marche) :
+
+| Joueur | Comportement réel | `target_per_100_dig` | `detour_factor` | `turn_toward_ore_rate` | Score | Verdict |
 |---|---|---|---|---|---|---|
-| Joueur 1 | X-ray simulé | 5.83 | 2.51 | 0.71 | **67.2** | fortement suspect |
-| Joueur 2 | X-ray simulé | 5.12 | 2.70 | 0.66 | **59.7** | à surveiller |
-| Joueur 3 | Strip-mining légitime | 1.50 | 9.76 | 0.57 | **18.8** | RAS |
+| Joueur 1 | X-ray simulé | 5.24 | 2.83 | 0.75 | **64.7** | fortement suspect |
+| Joueur 2 | X-ray simulé | 6.28 | 2.94 | 0.66 | **54.9** | à surveiller |
+| Joueur 3 | Strip-mining légitime | 1.52 | 2.59 | 0.55 | **24.9** | RAS |
 
 Le classement est correct et l'écart net entre les deux profils. À noter :
 
-- Le **rendement** et le **détour** discriminent très bien (9.76 pour le quadrillage légitime contre ~2.6 pour les x-rayeurs — pas 1.0, car même un tunnel « droit » en 2 de haut zigzague bloc par bloc).
+- Le **rendement** discrimine très bien ; le **détour** s'est resserré depuis que les paires traversées par un pas de marche sont exclues (le quadrillage légitime perdait surtout ses paires longues), à recalibrer sur données réelles.
 - `mean_run_h` (~1.1 bloc pour tout le monde) et `changes_per_100` (~85 partout) ne discriminent **pas** en l'état : le minage en tunnel de 2 de haut alterne un pas avant / un pas vertical, ce qui écrase la macro-structure du chemin. Voir limites ci-dessous.
 
 ## Limites connues et pistes
@@ -129,6 +141,7 @@ Le classement est correct et l'écart net entre les deux profils. À noter :
 - **Calibration** : les bornes des rampes (et `TARGET_RATE_RAMPS` pour les minerais autres que le diamant) sont des estimations à recalibrer sur données réelles étiquetées.
 - **Virages en cours de filon** : les changements de direction pendant qu'on casse un filon diluent `turn_toward_ore_rate`. Le biais est le même pour tous les joueurs, mais le signal serait plus net en les excluant.
 - **Le score est par session** : un tricheur qui alterne minage propre et x-ray dans la même session dilue son score. La fenêtre temporelle de la preview 3D permet déjà d'inspecter visuellement ; un scoring par fenêtre glissante est la suite logique.
+- **Évasion par la marche** : un x-rayeur qui parcourt un réseau de grottes et ne creuse que les 2-3 derniers blocs vers chaque filon échappe en partie au rendement « creusage ». Sans donnée d'exposition des blocs (collecteur figé), on ne peut pas fermer complètement ce trou ; les contre-mesures prévues sont un plancher « à surveiller » sur le rendement pleine-session anormal et le comptage des filons atteints par un creusage court *dans un mur* (percer un mur pile sur un filon reste une fuite d'information, même en grotte).
 
 ## Sorties
 

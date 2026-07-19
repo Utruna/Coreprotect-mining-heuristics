@@ -25,6 +25,7 @@ from xray_detector.mining import (
     anonymize_players,
     filter_cave_like_sessions,
     load_breaks,
+    parse_utc_datetime,
     segment_sessions,
 )
 
@@ -42,6 +43,7 @@ VERDICT_COLORS = {
     "fortement suspect": "#d03b3b",
     "a surveiller": "#fab219",
     "RAS": "#0ca30c",
+    "indeterminable": "#898781",
 }
 
 SURFACE = "#14171c"
@@ -53,7 +55,7 @@ GRIDLINE = "#2a2f38"
 def feature_panels(target_label: str) -> list[tuple[str, str, float | None]]:
     # (colonne, titre du panneau, ligne de reference facultative)
     return [
-        ("target_per_100", f"{target_label} / 100 blocs", None),
+        ("target_per_100_dig", f"{target_label} / 100 blocs creuses", None),
         ("detour_factor", "Facteur de detour entre filons\n(pointille : 1 = ligne droite)", 1.0),
         ("turn_toward_ore_rate", "Virages orientes vers le prochain\nfilon (pointille : 0.5 = hasard)", 0.5),
         ("mean_blocks_between_veins", "Blocs mines entre deux filons", None),
@@ -81,9 +83,10 @@ def analyze(df: pd.DataFrame, worlds: dict[int, str], target: str) -> pd.DataFra
 
 def print_report(table: pd.DataFrame) -> None:
     display_cols = [
-        "pseudo", "n_blocks", "duration_min", "target_per_100", "n_target_veins",
+        "pseudo", "n_blocks", "n_dig_blocks", "dig_ratio", "duration_min",
+        "target_per_100_dig", "n_target_veins", "n_dig_veins",
         "mean_blocks_between_veins", "detour_factor", "turn_toward_ore_rate",
-        "changes_per_100", "mean_run_h", "mean_run_v", "score", "verdict",
+        "changes_per_100", "score", "verdict",
     ]
     print("\n--- Features et score par session (trie par score decroissant) ---")
     print(table[display_cols].to_string(index=False))
@@ -133,12 +136,14 @@ def build_figure(table: pd.DataFrame, output: Path, target_label: str) -> None:
     # Panneau score : barres horizontales, couleur de statut selon le verdict.
     ax = fig.add_subplot(grid[2, :])
     ys = range(len(table))
-    ax.barh(ys, table["score"], height=0.5,
+    scores = table["score"].fillna(0.0)
+    ax.barh(ys, scores, height=0.5,
             color=[VERDICT_COLORS[v] for v in table["verdict"]], zorder=3)
     for y, (score, verdict, pseudo) in enumerate(
-        zip(table["score"], table["verdict"], table["pseudo"])
+        zip(scores, table["verdict"], table["pseudo"])
     ):
-        ax.annotate(f"{score:g} - {verdict}", (score, y), va="center", fontsize=9,
+        label = verdict if verdict == "indeterminable" else f"{score:g} - {verdict}"
+        ax.annotate(label, (score, y), va="center", fontsize=9,
                     color=INK_PRIMARY, xytext=(6, 0), textcoords="offset points")
     ax.set_yticks(list(ys), table["pseudo"], fontsize=9)
     ax.invert_yaxis()
@@ -170,6 +175,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB,
                         help=f"Base CoreProtect SQLite (defaut : {DEFAULT_DB}).")
+    parser.add_argument("--start", default=None,
+                        help="Debut de la fenetre temporelle, date ISO UTC "
+                             "(ex : 2026-06-01 ou 2026-06-01T00:00:00Z). "
+                             "Le filtre est pousse dans le SQL : indispensable sur une grosse base.")
+    parser.add_argument("--end", default=None,
+                        help="Fin de la fenetre temporelle (incluse), date ISO UTC.")
     parser.add_argument("--gap", type=int, default=300,
                         help="Trou temporel en secondes qui coupe une session (defaut : 300).")
     parser.add_argument("--min-blocks", type=int, default=50,
@@ -204,7 +215,16 @@ def main(argv: list[str] | None = None) -> int:
     if not args.db.exists():
         raise SystemExit(f"Base introuvable : {args.db}")
 
-    df, worlds = load_breaks(args.db)
+    start_ts = int(parse_utc_datetime(args.start).timestamp()) if args.start else None
+    end_ts = int(parse_utc_datetime(args.end).timestamp()) if args.end else None
+    if start_ts is not None and end_ts is not None and end_ts < start_ts:
+        raise SystemExit("--end est anterieur a --start.")
+    if start_ts or end_ts:
+        print(f"Fenetre temporelle : {args.start or 'debut'} -> {args.end or 'fin'} (UTC)")
+
+    df, worlds = load_breaks(args.db, start_ts=start_ts, end_ts=end_ts)
+    if df.empty:
+        raise SystemExit("Aucun bloc casse dans la fenetre demandee.")
     print(f"{len(df)} blocs casses par {df['pseudo'].nunique()} joueurs charges depuis {args.db.name}")
 
     if args.anonymize:

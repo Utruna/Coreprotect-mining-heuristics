@@ -7,8 +7,11 @@ import math
 import pandas as pd
 import pytest
 
+import numpy as np
+
 from xray_detector.features import (
     compute_session_features,
+    dig_block_mask,
     ore_veins,
     score_session,
 )
@@ -107,8 +110,8 @@ def test_turn_toward_hidden_vein():
 
 
 def test_score_separates_profiles():
-    xray = {"target_per_100": 5.8, "detour_factor": 1.1, "turn_toward_ore_rate": 0.9}
-    legit = {"target_per_100": 0.5, "detour_factor": 4.0, "turn_toward_ore_rate": 0.45}
+    xray = {"target_per_100_dig": 5.8, "detour_factor": 1.1, "turn_toward_ore_rate": 0.9}
+    legit = {"target_per_100_dig": 0.5, "detour_factor": 4.0, "turn_toward_ore_rate": 0.45}
     assert score_session(xray)["score"] > 90
     assert score_session(legit)["score"] < 10
     assert score_session(xray)["verdict"] == "fortement suspect"
@@ -116,14 +119,84 @@ def test_score_separates_profiles():
 
 
 def test_score_uses_target_rate_ramp():
-    feats = {"target_per_100": 5.0, "detour_factor": math.nan, "turn_toward_ore_rate": math.nan}
-    # 5 fers / 100 blocs est banal, 5 diamants / 100 blocs est sature.
+    feats = {"target_per_100_dig": 5.0, "detour_factor": math.nan, "turn_toward_ore_rate": math.nan}
+    # 5 fers / 100 blocs est banal, 5 diamants / 100 blocs est sature (mais plafonne :
+    # le rendement seul ne suffit plus, voir test_score_caps_partial_evidence).
     assert score_session(feats, target="iron")["score"] < 50
-    assert score_session(feats, target="diamond")["score"] == 100.0
+    assert score_session(feats, target="diamond")["score"] == 59.9
 
 
-def test_score_handles_missing_indicators():
+def test_score_caps_partial_evidence():
+    # Rendement sature mais seul indicateur calculable (poids 0.4 < MIN_WEIGHT_SUM) :
+    # score plafonne sous "fortement suspect".
     result = score_session(
-        {"target_per_100": 3.5, "detour_factor": math.nan, "turn_toward_ore_rate": math.nan}
+        {"target_per_100_dig": 3.5, "detour_factor": math.nan, "turn_toward_ore_rate": math.nan}
     )
-    assert result["score"] == 100.0  # seul indicateur disponible, sature
+    assert result["score"] == 59.9
+    assert result["verdict"] == "a surveiller"
+    assert result["evidence_weight"] == 0.4
+
+
+def test_score_discards_indicators_without_evidence():
+    # detour_factor sur une seule paire et turn_toward sur 2 virages : preuves
+    # insuffisantes, seuls le rendement (plafonne) reste.
+    feats = {
+        "target_per_100_dig": 5.0,
+        "detour_factor": 1.0,
+        "n_detour_pairs": 1,
+        "turn_toward_ore_rate": 1.0,
+        "n_turns_evaluated": 2,
+    }
+    result = score_session(feats)
+    assert math.isnan(result["ind_detour_factor"])
+    assert math.isnan(result["ind_turn_toward_ore_rate"])
+    assert result["score"] == 59.9
+
+
+def test_dig_block_mask_contiguous_tunnel():
+    dists = np.ones(10)  # tunnel continu, pas de 1 bloc
+    assert dig_block_mask(dists).all()
+
+
+def test_dig_block_mask_two_tunnels_with_jump():
+    dists = np.array([1.0] * 5 + [20.0] + [1.0] * 5)
+    mask = dig_block_mask(dists)
+    assert mask.all()  # les deux tunnels sont des phases de creusage valides
+
+
+def test_dig_block_mask_demotes_short_phases():
+    # Paires de casses isolees separees par des marches : ramassage en grotte.
+    dists = np.array([1.0, 8.0, 1.0, 8.0, 1.0])
+    assert not dig_block_mask(dists).any()
+
+
+def test_cave_picker_is_not_flagged():
+    # Joueur en grotte : 15 ramassages de 2 blocs (pierre + diamant expose),
+    # separes par des marches de 8 blocs. Aucune phase de creusage valide.
+    coords, diamonds = [], set()
+    for i in range(15):
+        x = i * 10
+        coords += [(x, 0, 0), (x + 1, 0, 0)]
+        diamonds.add(len(coords) - 1)
+    feats = compute_session_features(make_session(coords, diamonds))
+    assert feats["n_dig_blocks"] == 0
+    assert math.isnan(feats["target_per_100_dig"])
+    assert feats["n_dig_veins"] == 0
+    assert math.isnan(feats["detour_factor"])
+    result = score_session(feats)
+    assert result["verdict"] == "indeterminable"
+
+
+def test_strip_miner_crossing_cave_keeps_dig_features():
+    # Tunnel de 40 blocs (2 filons), traversee de grotte (20 blocs de marche),
+    # second tunnel de 40 blocs (1 filon).
+    coords = east(40) + east(40, start=(60, 0, 0))
+    diamonds = {10, 30, 60}
+    feats = compute_session_features(make_session(coords, diamonds))
+    assert feats["n_dig_blocks"] == 80
+    assert feats["dig_ratio"] == 1.0
+    assert feats["target_per_100_dig"] == pytest.approx(3 / 80 * 100, abs=0.01)
+    assert feats["n_dig_veins"] == 3
+    # La paire de filons qui traverse la grotte est exclue du detour.
+    assert feats["n_detour_pairs"] == 1
+    assert feats["detour_factor"] == pytest.approx(1.0)

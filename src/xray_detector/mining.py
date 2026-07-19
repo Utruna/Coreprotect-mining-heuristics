@@ -11,9 +11,27 @@ trajectoires (la roche est le chemin, les minerais sont la cible) :
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+
+
+def parse_utc_datetime(value: str) -> datetime:
+    """Parse une date ISO en UTC. Accepte un suffixe Z, un offset explicite,
+    une date seule (2026-06-01) ou des champs non zero-padded (2026-6-1)."""
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    date_part, sep, time_part = raw.partition("T")
+    pieces = date_part.split("-")
+    if len(pieces) == 3 and all(piece.isdigit() for piece in pieces):
+        year, month, day = pieces
+        raw = f"{year}-{int(month):02d}-{int(day):02d}{sep}{time_part}"
+    dt = datetime.fromisoformat(raw)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 EXTRACTION_SQL_BASE = """
     SELECT

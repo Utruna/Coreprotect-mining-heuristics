@@ -34,6 +34,7 @@ from xray_detector.mining import (
     anonymize_players,
     filter_cave_like_sessions,
     load_breaks,
+    parse_utc_datetime,
     segment_sessions,
 )
 
@@ -72,21 +73,6 @@ def fmt_date(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d/%m/%Y")
 
 
-def parse_utc_datetime(value: str) -> datetime:
-  """Parse une date ISO en UTC. Accepte un suffixe Z ou un offset explicite."""
-  raw = value.strip()
-  if raw.endswith("Z"):
-    raw = raw[:-1] + "+00:00"
-  if "T" in raw:
-    date_part, time_part = raw.split("T", 1)
-    pieces = date_part.split("-")
-    if len(pieces) == 3 and all(piece.isdigit() for piece in pieces):
-      year, month, day = pieces
-      raw = f"{year}-{int(month):02d}-{int(day):02d}T{time_part}"
-  dt = datetime.fromisoformat(raw)
-  if dt.tzinfo is None:
-    dt = dt.replace(tzinfo=timezone.utc)
-  return dt.astimezone(timezone.utc)
 def requested_time_window(args: argparse.Namespace) -> tuple[int | None, int | None]:
     """Calcule la fenêtre demandée sans regarder la base.
 
@@ -487,9 +473,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     permet d'afficher ou de masquer chaque couche, ou tout d'un coup.</p>
 
     <h3>Les trois indicateurs du score</h3>
-    <div class="metric-def"><strong>Rendement (minerai cible / 100 blocs)</strong>
+    <div class="metric-def"><strong>Rendement (minerai cible / 100 blocs creusés)</strong>
       <p>Combien de blocs du minerai surveillé le joueur trouve pour 100 blocs
-      cassés. Un strip-mineur légitime à Y-59 trouve environ 0,3 à 0,8 diamant
+      <em>creusés</em> — seules les casses en phase de creusage comptent (pas
+      ≤ 2 blocs entre casses consécutives) : les minerais ramassés en marchant
+      dans une grotte, exposés et visibles, n'entrent pas dans ce rendement.
+      Un strip-mineur légitime à Y-59 trouve environ 0,3 à 0,8 diamant
       pour 100 blocs&nbsp;; au-delà de 3, le rendement n'est plus explicable par la
       chance. Les bornes s'adaptent au minerai choisi (trouver 5 fers / 100 blocs
       est banal, 5 diamants ne l'est pas).</p></div>
@@ -498,12 +487,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       par la distance à vol d'oiseau. 1× = ligne parfaitement droite de filon en
       filon. Un joueur légitime quadrille et retombe sur les filons par hasard
       (≥&nbsp;3×)&nbsp;; un x-rayeur va presque tout droit (≤&nbsp;1,4× déclenche l'alerte,
-      en pratique ~2,5× à cause du tunnel de 2 de haut qui zigzague bloc à bloc).</p></div>
+      en pratique ~2,5× à cause du tunnel de 2 de haut qui zigzague bloc à bloc).
+      Seuls les filons <em>atteints en creusant</em> comptent, et une paire
+      traversée par un pas de marche est ignorée&nbsp;: marcher droit vers un
+      minerai visible en grotte n'est pas suspect.</p></div>
     <div class="metric-def"><strong>Virages orientés vers le prochain filon</strong>
       <p>À chaque changement de direction, la nouvelle direction rapproche-t-elle
-      du prochain filon <strong>pas encore découvert</strong>&nbsp;? Un virage au hasard
-      rapproche environ 1 fois sur 2 (50&nbsp;%). Viser juste presque à chaque virage
-      trahit une information que le joueur ne devrait pas avoir.</p></div>
+      du prochain filon <strong>pas encore découvert</strong> (et atteint en
+      creusant)&nbsp;? Un virage au hasard rapproche environ 1 fois sur 2 (50&nbsp;%).
+      Viser juste presque à chaque virage trahit une information que le joueur ne
+      devrait pas avoir.</p></div>
 
     <h3>Les détails de la session</h3>
     <div class="metric-def"><strong>Filons / blocs entre filons</strong>
@@ -741,8 +734,8 @@ function renderPanel() {
     fmtTime(S.t0) + " → " + fmtTime(S.t1);
 
   const meters = [
-    ["Rendement", fmtVal(A.target_per_100, " / 100 blocs"), A.ind_target_per_100,
-     label + " trouvés pour 100 blocs cassés"],
+    ["Rendement (creusage)", fmtVal(A.target_per_100_dig, " / 100 blocs"), A.ind_target_per_100_dig,
+     label + " trouvés pour 100 blocs creusés"],
     ["Détour entre filons", fmtVal(A.detour_factor, "×"), A.ind_detour_factor,
      "1× = ligne droite de filon en filon"],
     ["Virages vers le filon", A.turn_toward_ore_rate === null ? "—"
