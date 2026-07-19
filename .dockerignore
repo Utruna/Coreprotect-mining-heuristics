@@ -1,0 +1,16 @@
+.git
+.gitignore
+.venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+data/**/*.db
+data/raw/**/*.sqlite
+data/raw/**/*.sqlite3
+data/interim/
+data/processed/
+reports/
+notebooks/

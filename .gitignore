@@ -27,3 +27,4 @@ build/
 # Local VS Code state
 .vscode/*.log
 .data/*
+.claude/*
