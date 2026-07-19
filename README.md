@@ -1,74 +1,49 @@
 # AntiCheat X-Ray Detection
 
-Base de projet pour analyser a posteriori les logs CoreProtect et produire un score de suspicion x-ray par joueur ou session de minage.
+Outil d'analyse a posteriori des logs CoreProtect pour détecter un comportement de x-ray (minage guidé par une vision à travers les blocs) sur un serveur Minecraft. À partir de la base SQLite CoreProtect, le pipeline reconstruit les sessions de minage de chaque joueur, en extrait des indicateurs de trajectoire et de rendement, et calcule un score de suspicion 0-100 par session.
 
-## Ce qui est déjà en place
+Deux façons de consulter les résultats :
 
-- Environnement Python virtuel configuré dans `.venv`
-- Structure `src/` prête pour le code du pipeline
-- Dossiers de travail pour les données brutes, intermédiaires et traitées
-- Entrée CLI minimale pour préparer le workspace et afficher la configuration
-- Preview 3D interactive des sessions de minage — voir [readmePreview.md](readmePreview.md)
-- Analyse statistique des trajectoires et score de suspicion V1 — voir [readmeAnalyse.md](readmeAnalyse.md)
+- **Preview 3D interactive** — reconstruction de la scène de minage dans le navigateur, pour voir la différence entre un tunnel de strip-mining légitime et un chemin qui file de filon en filon. Voir [readmePreview.md](readmePreview.md).
+- **Analyse statistique** — calcul des features par session et du score de suspicion, en ligne de commande ou intégré à la preview. Voir [readmeAnalyse.md](readmeAnalyse.md).
+
+Sur la base de test (vérité terrain connue), le score sépare nettement les deux joueurs x-ray simulés (67.2 et 59.7) du minage légitime (18.8) — détail dans [readmeAnalyse.md](readmeAnalyse.md#résultats-sur-la-base-test-vérité-terrain-connue).
 
 ## Démarrage rapide
 
 1. Ouvrir le projet dans VS Code.
 2. Vérifier que l'interpréteur utilisé est `.venv/Scripts/python.exe`.
-3. Lancer la configuration du workspace:
+3. Lancer la configuration du workspace :
 
 ```powershell
 python -m xray_detector init
 ```
 
-4. Afficher la configuration détectée:
+4. Afficher la configuration détectée :
 
 ```powershell
 python -m xray_detector show-config
 ```
 
-## Accès Docker à CoreProtect
-
-Un mini environnement Docker est disponible pour exposer [data/raw/CoreProtect/database.db](data/raw/CoreProtect/database.db) dans PostgreSQL via `sqlite_fdw`.
+5. Générer la preview 3D et l'analyse :
 
 ```powershell
-docker compose up --build
+.venv\Scripts\python.exe scripts\render_mining_3d.py
 ```
 
-Une fois le conteneur démarré, les tables SQLite sont importées dans le schéma `coreprotect` de PostgreSQL. Tu peux ensuite t’y connecter sur le port `5433` avec `postgres / postgres`.
-
-Paramètres de connexion à saisir dans ton client PostgreSQL:
-
-- Hôte: `localhost`
-- Port: `5433`
-- Base de données: `coreprotect` ou laisser vide si ton client l’autorise
-- Utilisateur: `postgres`
-- Mot de passe: `postgres`
-
-Ne mets pas `5432:5432` dans le champ port du client. Cette valeur sert seulement dans Docker pour faire correspondre le port du conteneur avec celui de la machine. Ici j’ai déplacé le service sur `5433` parce que `5432` est déjà pris sur Windows.
-
-Si la base est très grosse, il vaut mieux importer les tables à la demande plutôt qu’au démarrage. Exemple:
-
-```sql
-IMPORT FOREIGN SCHEMA main
-	LIMIT TO (co_user, co_session, co_block)
-	FROM SERVER coreprotect_sqlite
-	INTO coreprotect;
-```
-
-Tu peux aussi créer une seule table étrangère manuellement si tu veux tester avant d’importer le reste.
+Voir [readmePreview.md](readmePreview.md) et [readmeAnalyse.md](readmeAnalyse.md) pour toutes les options (base à analyser, fenêtre temporelle, minerai surveillé, anonymisation...).
 
 ## Structure
 
-- `src/xray_detector/` : logique applicative
+- `src/xray_detector/` : logique applicative (extraction, sessionization, features, pipeline, CLI)
+- `scripts/` : preview 3D, analyse en ligne de commande, extraction des événements de minage
 - `tests/` : tests unitaires
-- `data/raw/` : archive et exports bruts
+- `data/raw/` : archive et exports bruts (base CoreProtect SQLite)
 - `data/interim/` : sorties temporaires
-- `data/processed/` : tables prêtes pour l'analyse
-- `reports/figures/` : visuels et exports
+- `data/processed/` : tables prêtes pour l'analyse (CSV de features par session)
+- `reports/figures/` : preview 3D, figures comparatives, captures
 - `notebooks/` : exploration et EDA
-- `scripts/` : utilitaires ponctuels
 
 ## Prochaine étape
 
-Brancher le premier vrai flux sur l'archive CoreProtect: inspection, extraction ciblée, puis export Parquet partitionné.
+Voir « Limites connues et pistes » dans [readmeAnalyse.md](readmeAnalyse.md#limites-connues-et-pistes).
