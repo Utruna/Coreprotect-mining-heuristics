@@ -4,6 +4,8 @@ Reconstruction 3D interactive des sessions de minage à partir d'une base CorePr
 
 ![Session x-ray](reports/figures/preview_IxLikexYoou44.png)
 
+🔗 **[Démo live (anonymisée)](https://utruna.github.io/AntiCheat/)** — la page ci-dessous, directement dans le navigateur.
+
 ## Lancement
 
 Depuis la racine du projet, avec l'environnement virtuel du projet :
