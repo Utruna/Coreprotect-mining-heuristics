@@ -2,7 +2,7 @@
 
 Outil d'analyse a posteriori des logs CoreProtect pour détecter un comportement de x-ray (minage guidé par une vision à travers les blocs) sur un serveur Minecraft. À partir de la base SQLite CoreProtect, le pipeline reconstruit les sessions de minage de chaque joueur, en extrait des indicateurs de trajectoire et de rendement, et calcule un score de suspicion 0-100 par session.
 
-🔗 **[Démo live (anonymisée)](https://utruna.github.io/AntiCheat/)** — preview 3D interactive hébergée sur GitHub Pages, aucune installation nécessaire.
+🔗 **[Démo live (anonymisée)](https://utruna.github.io/Coreprotect-mining-heuristics/)** — preview 3D interactive hébergée sur GitHub Pages, aucune installation nécessaire.
 
 Deux façons de consulter les résultats :
 
