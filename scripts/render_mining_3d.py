@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from xray_detector.anomaly_model import load_model, score_anomalies
 from xray_detector.features import compute_session_features, score_session
 from xray_detector.mining import (
     ORE_FAMILIES,
@@ -42,6 +43,7 @@ from xray_detector.mining import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = PROJECT_ROOT / "data" / "raw" / "database_testserv.db"
 DEFAULT_OUTPUT = PROJECT_ROOT / "reports" / "figures" / "mining_sessions_3d.html"
+MODELS_DIR = PROJECT_ROOT / "data" / "models"
 
 # Couleur par famille de minerai, ancree sur l'identite visuelle des minerais en jeu.
 # Separation daltonisme (pire paire adjacente dE 14.7 > seuil 12) et contraste fond sombre
@@ -110,6 +112,22 @@ def _json_safe(values: dict) -> dict:
     }
 
 
+def load_anomaly_models(present: list[str]) -> dict:
+    """Charge les modeles d'anomalie disponibles (un par minerai cible, optionnels).
+
+    Le modele complete le score heuristique V1 dans le panneau (bloc "ecart au
+    corpus") ; un minerai sans modele entraine affiche simplement l'etat absent.
+    """
+    models = {}
+    for key in present:
+        path = MODELS_DIR / f"anomaly_iforest_{key}.joblib"
+        if path.exists():
+            model = load_model(path)
+            if model.target == key:
+                models[key] = model
+    return models
+
+
 def build_payload(df: pd.DataFrame, worlds: dict[int, str]) -> dict:
     """Serialise sessions, analyse par minerai cible et palette pour le JS de la page."""
     materials = sorted(df["material"].unique())
@@ -117,6 +135,14 @@ def build_payload(df: pd.DataFrame, worlds: dict[int, str]) -> dict:
     families = [[key, label, FAMILY_COLORS[key]] for key, label in ORE_FAMILIES.items()]
     fam_index = {key: i for i, (key, _, _) in enumerate(families)}
     present = [key for key in ORE_FAMILIES if (df["ore"] == key).any()]
+
+    models = load_anomaly_models(present)
+    if models:
+        print("Modeles d'anomalie charges : " + ", ".join(
+            f"{k} ({m.n_train_sessions} sessions)" for k, m in models.items()))
+    else:
+        print("Aucun modele d'anomalie (data/models/) : le panneau n'affichera "
+              "que le score V1. Entrainement : scripts/train_anomaly_model.py")
 
     sessions = []
     for (pseudo, wid, _sid), seg in df.groupby(["pseudo", "wid", "session_id"], sort=True):
@@ -127,7 +153,12 @@ def build_payload(df: pd.DataFrame, worlds: dict[int, str]) -> dict:
         analysis = {}
         for key in present:
             features = compute_session_features(seg, target=key)
-            analysis[key] = _json_safe({**features, **score_session(features, target=key)})
+            entry = {**features, **score_session(features, target=key)}
+            if key in models:
+                scored = score_anomalies(models[key], pd.DataFrame([features])).iloc[0]
+                entry["anomaly_score"] = float(scored["anomaly_score"])
+                entry["anomaly_top_feature"] = str(scored["anomaly_top_feature"])
+            analysis[key] = _json_safe(entry)
 
         sessions.append(
             {
@@ -155,6 +186,10 @@ def build_payload(df: pd.DataFrame, worlds: dict[int, str]) -> dict:
         "materials": [m.removeprefix("minecraft:") for m in materials],
         "families": families,
         "presentFamilies": present,
+        "anomalyModels": {
+            key: {"n": model.n_train_sessions, "contamination": model.contamination}
+            for key, model in models.items()
+        },
         "tunnelColor": TUNNEL_COLOR,
         "pathColor": PATH_COLOR,
         "surface": SURFACE_DARK,
@@ -357,6 +392,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .meter .hint { margin-top: 4px; font-size: 10.5px; color: var(--ink-3); }
 
+  /* Ecart au corpus (modele d'anomalie) : jauge 0-100 avec repere au seuil 50 */
+  .anomaly-bar {
+    position: relative; height: 6px; border-radius: 3px;
+    background: #242a35; overflow: visible;
+  }
+  .anomaly-bar i {
+    display: block; height: 100%; border-radius: 3px;
+    background: var(--accent); transition: width 0.25s ease;
+  }
+  .anomaly-bar .tick {
+    position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px;
+    background: var(--ink-3); border-radius: 1px;
+  }
+  .anomaly-empty { font-size: 11px; color: var(--ink-3); line-height: 1.5; }
+
   .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .tile {
     background: var(--raised); border: 1px solid var(--border);
@@ -453,6 +503,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div id="meters"></div>
     </div>
     <div>
+      <div class="section-title">Écart au corpus (modèle d'anomalie)</div>
+      <div id="anomaly-block"></div>
+    </div>
+    <div>
       <div class="section-title">Details de la session</div>
       <div class="tiles" id="tiles"></div>
     </div>
@@ -471,8 +525,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div class="rank" id="rank"></div>
     </div>
     <div class="footnote">
-      Score heuristique V1, calcule sur la session entiere (la fenetre temporelle
-      filtre la scene 3D, pas l'analyse). Voir readmeAnalyse.md pour la methode.
+      Score heuristique V1 et ecart au corpus (Isolation Forest), calcules sur la
+      session entiere (la fenetre temporelle filtre la scene 3D, pas l'analyse).
+      Voir readmeAnalyse.md pour la methode.
     </div>
   </aside>
 </main>
@@ -548,6 +603,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     pensée pour être remplacée par un modèle entraîné dès qu'un corpus étiqueté
     suffisant existera. Le score porte toujours sur la session entière&nbsp;: la
     fenêtre temporelle filtre la scène, pas l'analyse.</p>
+
+    <h3>L'écart au corpus (modèle d'anomalie)</h3>
+    <p>Un second regard, indépendant du score&nbsp;: un <strong>Isolation
+    Forest</strong> (modèle non supervisé) entraîné sur les sessions de la vraie
+    base mesure à quel point la session s'écarte d'une session <em>typique</em> du
+    corpus, sur 13 features à la fois — y compris celles que le score V1
+    n'utilise pas (forme du chemin, part creusée…). La jauge est normalisée
+    0-100&nbsp;: <strong>50 = seuil de contamination</strong> (le repère sur la
+    barre)&nbsp;; au-delà, la session est plus atypique que l'immense majorité du
+    corpus d'entraînement. «&nbsp;Tiré par&nbsp;» indique la feature qui contribue le
+    plus à l'écart.</p>
+    <p><strong>Atypique ne veut pas dire tricheur.</strong> Le modèle n'a aucune
+    étiquette&nbsp;: il dit «&nbsp;cette session ne ressemble pas au corpus&nbsp;», rien de
+    plus. Une session très haute sur cette jauge mais RAS au score V1 mérite une
+    inspection visuelle, pas une sanction. Voir readmeAnalyse.md pour la méthode
+    (features, imputation, directionnalité, limites).</p>
   </div>
 </div>
 
@@ -563,6 +634,23 @@ if (!DATA.presentFamilies.includes(state.target)) state.target = DATA.presentFam
 
 const FAMILY_LABEL = {}, FAMILY_INDEX = {};
 DATA.families.forEach((f, i) => { FAMILY_LABEL[f[0]] = f[1]; FAMILY_INDEX[f[0]] = i; });
+
+// Libelles courts des features pour l'explication du modele d'anomalie.
+const FEATURE_LABEL = {
+  target_per_100_dig: "rendement (creusage)",
+  target_per_100: "rendement (session entière)",
+  ore_per_100: "minerais / 100 blocs",
+  mean_blocks_between_veins: "blocs entre filons",
+  detour_factor: "détour entre filons",
+  turn_toward_ore_rate: "virages vers le filon",
+  changes_per_100: "virages / 100",
+  mean_run_h: "segments droits H",
+  mean_run_v: "segments droits V",
+  vertical_step_ratio: "pas verticaux",
+  dig_ratio: "part creusée",
+  walk_step_ratio: "pas de marche",
+  path_straightness: "rectitude du chemin",
+};
 
 const VERDICT_STYLE = {
   "fortement suspect": ["var(--crit)", "fortement suspect"],
@@ -771,6 +859,32 @@ function renderPanel() {
     (ind === null || ind === undefined ? 0 : Math.round(ind * 100)) +
     "%\"></i></div><div class=\"hint\">" + hint + "</div></div>"
   ).join("");
+
+  const AM = (DATA.anomalyModels || {})[state.target];
+  const an = A.anomaly_score;
+  let anomalyHtml;
+  if (!AM) {
+    anomalyHtml = "<div class=\"anomaly-empty\">Pas de modèle entraîné pour " +
+      label.toLowerCase() + " — voir scripts/train_anomaly_model.py.</div>";
+  } else if (an === null || an === undefined) {
+    anomalyHtml = "<div class=\"anomaly-empty\">Score indisponible pour cette session.</div>";
+  } else {
+    const topFeat = A.anomaly_top_feature ?
+      (FEATURE_LABEL[A.anomaly_top_feature] || A.anomaly_top_feature) : null;
+    const reading = an >= 50
+      ? "plus atypique que " + Math.round(100 * (1 - AM.contamination)) +
+        " % du corpus d'entraînement"
+      : "dans la normale du corpus d'entraînement";
+    anomalyHtml =
+      "<div class=\"meter\"><div class=\"row\"><span class=\"name\">Isolation Forest (" +
+      AM.n + " sessions)</span><span class=\"val\">" + an + " / 100</span></div>" +
+      "<div class=\"anomaly-bar\"><i style=\"width:" + Math.round(an) +
+      "%\"></i><span class=\"tick\" title=\"50 = seuil de contamination\"></span></div>" +
+      "<div class=\"hint\">" + reading +
+      (topFeat ? " · tiré par : <b>" + topFeat + "</b>" : "") +
+      " · atypique ≠ tricheur</div></div>";
+  }
+  el("anomaly-block").innerHTML = anomalyHtml;
 
   const tiles = [
     [fmtVal(A.duration_min, " min"), "Durée"],

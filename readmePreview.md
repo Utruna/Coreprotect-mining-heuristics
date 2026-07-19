@@ -82,6 +82,7 @@ Le panneau d'analyse (à droite) :
 - **Minerai surveillé** : sélecteur (diamant, or, fer, cuivre…) qui pilote l'analyse, les stats du bandeau et la mise en avant des marqueurs de la cible dans la scène (plus gros, ⭐ dans la légende).
 - **Score de suspicion** en anneau (0-100) avec verdict coloré (RAS / à surveiller / fortement suspect).
 - **Indicateurs du score** : trois jauges (rendement, détour entre filons, virages vers le filon) avec valeur brute et rappel du seuil de référence.
+- **Écart au corpus (modèle d'anomalie)** : jauge 0-100 de l'Isolation Forest entraîné sur la vraie base (voir [readmeAnalyse.md](readmeAnalyse.md)), avec repère à 50 (seuil de contamination) et la feature qui tire le plus l'écart. Affiché uniquement si un modèle existe dans `data/models/` pour le minerai choisi (`scripts/train_anomaly_model.py`) — c'est un second regard indépendant du score V1, et atypique ≠ tricheur.
 - **Détails de la session** : durée, blocs, blocs/min, filons, blocs entre filons, segments droits H/V, virages/100, pas verticaux.
 - **Localisation** : monde et coordonnées du centre de la zone minée, avec un bouton **Copier /tp** qui met `/tp @s X Y Z` dans le presse-papier — à coller en jeu pour aller inspecter sur place (le point visé est un bloc cassé au milieu du parcours, donc dans la galerie creusée ; penser à se mettre dans le bon monde avant).
 - **Classement des sessions** trié par score pour le minerai choisi — cliquer sur une ligne ouvre la session.
