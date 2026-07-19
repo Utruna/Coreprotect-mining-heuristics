@@ -9,6 +9,8 @@ Deux façons de consulter les résultats :
 - **Preview 3D interactive** — reconstruction de la scène de minage dans le navigateur, pour voir la différence entre un tunnel de strip-mining légitime et un chemin qui file de filon en filon. Voir [readmePreview.md](readmePreview.md).
 - **Analyse statistique** — calcul des features par session et du score de suspicion, en ligne de commande ou intégré à la preview. Voir [readmeAnalyse.md](readmeAnalyse.md).
 
+Un second regard complète le score : une forêt d'isolation (Isolation Forest) apprend la session de minage « typique » du serveur et signale les écarts. Son fonctionnement est expliqué pas à pas, schémas et graphiques à l'appui, dans [readmeArbre.md](readmeArbre.md).
+
 Sur la base de test (vérité terrain connue), le score sépare nettement les deux joueurs x-ray simulés (67.2 et 59.7) du minage légitime (18.8) — détail dans [readmeAnalyse.md](readmeAnalyse.md#résultats-sur-la-base-test-vérité-terrain-connue).
 
 ## Démarrage rapide

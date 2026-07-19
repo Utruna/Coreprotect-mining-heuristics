@@ -139,7 +139,7 @@ Le classement est correct et l'écart net entre les deux profils. À noter :
 
 ## Détection d'anomalies non supervisée (Isolation Forest)
 
-Depuis le Jour 4, un second regard **complète** le score heuristique : un Isolation Forest ([src/xray_detector/anomaly_model.py](src/xray_detector/anomaly_model.py)) entraîné sans étiquettes sur les sessions de la vraie base. Là où le score V1 encode une connaissance du jeu (rampes calibrées à la main sur 3 indicateurs), le modèle apprend ce qu'est une session *typique* du corpus et mesure l'écart — sur 13 features à la fois, y compris celles que le score V1 n'utilise pas. Les deux colonnes coexistent dans toutes les sorties (`score`/`verdict` et `anomaly_score`) : c'est la confrontation des deux qui est informative, pas l'une ou l'autre seule.
+Depuis le Jour 4, un second regard **complète** le score heuristique : un Isolation Forest ([src/xray_detector/anomaly_model.py](src/xray_detector/anomaly_model.py)) entraîné sans étiquettes sur les sessions de la vraie base. Là où le score V1 encode une connaissance du jeu (rampes calibrées à la main sur 3 indicateurs), le modèle apprend ce qu'est une session *typique* du corpus et mesure l'écart — sur 13 features à la fois, y compris celles que le score V1 n'utilise pas. Les deux colonnes coexistent dans toutes les sorties (`score`/`verdict` et `anomaly_score`) : c'est la confrontation des deux qui est informative, pas l'une ou l'autre seule. Pour une explication illustrée du fonctionnement de la forêt (coupes aléatoires, profondeur d'isolation, écrêtage, normalisation), voir [readmeArbre.md](readmeArbre.md).
 
 ### Entraînement et scoring
 
