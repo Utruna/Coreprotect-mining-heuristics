@@ -314,12 +314,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     color: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums;
   }
 
-  #modal {
+  #modal, #overview {
     position: fixed; inset: 0; z-index: 50; display: none;
     align-items: center; justify-content: center;
     background: rgba(8, 10, 13, 0.62);
   }
-  #modal.open { display: flex; }
+  #modal.open, #overview.open { display: flex; }
   .modal-card {
     width: min(780px, calc(100vw - 40px)); max-height: calc(100vh - 60px);
     overflow-y: auto; background: var(--panel); border: 1px solid var(--border);
@@ -444,6 +444,37 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     font-variant-numeric: tabular-nums;
   }
   .footnote { font-size: 10.5px; color: var(--ink-3); line-height: 1.5; }
+
+  /* Vue d'ensemble : histogramme des scores + nuage V1 x anomalie sur tout le corpus */
+  .modal-card.wide { width: min(1120px, calc(100vw - 40px)); }
+  .overview-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 14px;
+  }
+  @media (max-width: 940px) { .overview-grid { grid-template-columns: 1fr; } }
+  .chart-block {
+    background: var(--raised); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px;
+  }
+  .chart-block h4 { margin: 0 0 2px; font-size: 13px; color: var(--ink); }
+  .chart-block .hint { font-size: 11px; color: var(--ink-3); margin: 0 0 8px; }
+  .chart-block svg, .chart-block canvas { width: 100%; height: auto; display: block; }
+  #ov-canvas { cursor: pointer; }
+  .ov-legend {
+    display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px;
+    font-size: 12px; color: var(--ink-2);
+  }
+  .ov-legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .ov-legend .sw {
+    display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+    margin-right: 6px; vertical-align: -1px;
+  }
+  #ov-tip {
+    position: fixed; z-index: 60; display: none; pointer-events: none;
+    background: #0d0f13; border: 1px solid var(--border); border-radius: 7px;
+    padding: 6px 10px; font-size: 12px; color: var(--ink-2);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  }
+  #ov-tip b { color: var(--ink); }
 </style>
 </head>
 <body>
@@ -466,6 +497,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <input type="time" id="time-end" step="1">
     <button id="reset-range" title="Revenir a la session entiere">Session entiere</button>
     <button id="toggle-panel" title="Afficher / masquer l'analyse">Analyse</button>
+    <button id="open-overview" title="Distribution des scores et croisement V1 x anomalie sur toutes les sessions">Vue d'ensemble</button>
     <button id="open-metrics" title="Comprendre les metriques">Métriques&nbsp;?</button>
   </div>
   <div id="stats"></div>
@@ -621,6 +653,33 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     (features, imputation, directionnalité, limites).</p>
   </div>
 </div>
+
+<div id="overview">
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>Vue d'ensemble — <span id="ov-target"></span></h2>
+      <button id="overview-close">Fermer</button>
+    </div>
+    <p id="ov-summary"></p>
+    <div class="overview-grid">
+      <div class="chart-block">
+        <h4>Distribution des scores de suspicion</h4>
+        <p class="hint">Sessions par tranche de 5 points — échelle verticale logarithmique
+          (la masse RAS écraserait tout en linéaire)</p>
+        <svg id="ov-histo" viewBox="0 0 520 300" role="img"
+             aria-label="Histogramme des scores de suspicion"></svg>
+      </div>
+      <div class="chart-block">
+        <h4>Score V1 × écart au corpus (modèle d'anomalie)</h4>
+        <p class="hint">Un point par session, couleur = verdict — cliquer un point ouvre la
+          session dans la scène 3D</p>
+        <canvas id="ov-canvas" width="1040" height="600"></canvas>
+      </div>
+    </div>
+    <div class="ov-legend" id="ov-legend"></div>
+  </div>
+</div>
+<div id="ov-tip"></div>
 
 <script>/*__PLOTLY_JS__*/</script>
 <script>
@@ -924,6 +983,162 @@ function renderPanel() {
   }
 }
 
+// --- Vue d'ensemble : histogramme des scores + nuage V1 x anomalie ---
+// Couleurs concretes (les var(--x) de VERDICT_STYLE ne marchent pas dans un canvas).
+const VERDICT_HEX = {
+  "fortement suspect": "#d03b3b", "a surveiller": "#fab219",
+  "RAS": "#0ca30c", "indeterminable": "#67707f",
+};
+const OV_ORDER = ["fortement suspect", "a surveiller", "indeterminable", "RAS"];
+let ovPoints = [];
+
+function ovTip(html, x, y) {
+  const tip = el("ov-tip");
+  tip.innerHTML = html;
+  tip.style.display = "block";
+  tip.style.left = Math.min(x + 14, innerWidth - tip.offsetWidth - 8) + "px";
+  tip.style.top = Math.max(y - tip.offsetHeight - 12, 8) + "px";
+}
+function ovTipHide() { el("ov-tip").style.display = "none"; }
+
+function renderOverview() {
+  const rows = DATA.sessions.map((s, i) => ({ i, s, a: s.analysis[state.target] || {} }));
+  const scored = rows.filter(r => r.a.score !== null && r.a.score !== undefined);
+  const counts = {};
+  for (const r of rows) {
+    const v = r.a.verdict || "indeterminable";
+    counts[v] = (counts[v] || 0) + 1;
+  }
+  el("ov-target").textContent = FAMILY_LABEL[state.target].toLowerCase();
+  el("ov-summary").textContent = rows.length + " sessions analysées (score sur la " +
+    "session entière, indépendant de la fenêtre temporelle).";
+  el("ov-legend").innerHTML = OV_ORDER.filter(v => counts[v]).map(v =>
+    "<span><span class=\"sw\" style=\"background:" + VERDICT_HEX[v] + "\"></span>" +
+    VERDICT_STYLE[v][1] + " <b>" + counts[v] + "</b></span>").join("");
+
+  // Histogramme (echelle log, tranches de 5 points)
+  const bins = new Array(20).fill(0);
+  for (const r of scored) bins[Math.min(19, Math.floor(r.a.score / 5))]++;
+  const maxN = Math.max(1, ...bins);
+  const M = { l: 44, r: 8, t: 14, b: 34 }, W = 520, H = 300;
+  const iw = W - M.l - M.r, ih = H - M.t - M.b;
+  const yLog = (n) => n <= 0 ? 0 : Math.log10(n + 1) / Math.log10(maxN + 1);
+  let svg = "";
+  for (const g of [1, 10, 100, 1000, 10000]) {
+    if (g > maxN) break;
+    const y = M.t + ih * (1 - yLog(g));
+    svg += "<line x1=\"" + M.l + "\" y1=\"" + y + "\" x2=\"" + (W - M.r) +
+      "\" y2=\"" + y + "\" stroke=\"#2a2f38\"/>" +
+      "<text x=\"" + (M.l - 7) + "\" y=\"" + (y + 3.5) +
+      "\" text-anchor=\"end\" font-size=\"10\" fill=\"#67707f\">" + g + "</text>";
+  }
+  const bw = iw / 20;
+  bins.forEach((n, i) => {
+    const h = ih * yLog(n);
+    const x = M.l + i * bw + 1.5, y = M.t + ih - h;
+    svg += "<rect data-bin=\"" + i + "\" data-n=\"" + n + "\" x=\"" + x.toFixed(1) + "\" y=\"" + y.toFixed(1) +
+      "\" width=\"" + (bw - 3).toFixed(1) + "\" height=\"" + h.toFixed(1) +
+      "\" rx=\"3\" fill=\"#35C7DB\"/>";
+    if (n > 0) svg += "<text x=\"" + (x + (bw - 3) / 2).toFixed(1) + "\" y=\"" +
+      (y - 4).toFixed(1) + "\" text-anchor=\"middle\" font-size=\"9\" " +
+      "fill=\"#9aa3b2\">" + n + "</text>";
+  });
+  for (const v of [0, 25, 50, 75, 100]) {
+    svg += "<text x=\"" + (M.l + iw * v / 100) + "\" y=\"" + (H - 14) +
+      "\" text-anchor=\"middle\" font-size=\"10\" fill=\"#67707f\">" + v + "</text>";
+  }
+  svg += "<text x=\"" + (M.l + iw / 2) + "\" y=\"" + (H - 2) +
+    "\" text-anchor=\"middle\" font-size=\"10\" fill=\"#67707f\">score de suspicion V1</text>";
+  el("ov-histo").innerHTML = svg;
+
+  // Nuage V1 x anomalie (canvas ; RAS en semi-transparent sous les autres verdicts)
+  const cv = el("ov-canvas"), ctx = cv.getContext("2d");
+  const CM = { l: 58, r: 14, t: 14, b: 54 }, CW = cv.width, CH = cv.height;
+  const cw = CW - CM.l - CM.r, ch = CH - CM.t - CM.b;
+  const X = (v) => CM.l + cw * v / 100, Y = (v) => CM.t + ch * (1 - v / 100);
+  ctx.clearRect(0, 0, CW, CH);
+  ctx.strokeStyle = "#2a2f38"; ctx.lineWidth = 1;
+  ctx.font = "18px system-ui, sans-serif"; ctx.fillStyle = "#67707f";
+  for (const v of [0, 25, 50, 75, 100]) {
+    ctx.beginPath(); ctx.moveTo(X(v), CM.t); ctx.lineTo(X(v), CM.t + ch); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(CM.l, Y(v)); ctx.lineTo(CM.l + cw, Y(v)); ctx.stroke();
+    ctx.textAlign = "center"; ctx.fillText(v, X(v), CH - 28);
+    ctx.textAlign = "right"; ctx.fillText(v, CM.l - 8, Y(v) + 6);
+  }
+  ctx.textAlign = "center";
+  ctx.fillText("score de suspicion V1", CM.l + cw / 2, CH - 6);
+  ctx.save(); ctx.translate(14, CM.t + ch / 2); ctx.rotate(-Math.PI / 2);
+  ctx.fillText("écart au corpus (0-100)", 0, 0); ctx.restore();
+
+  ovPoints = scored
+    .filter(r => r.a.anomaly_score !== null && r.a.anomaly_score !== undefined)
+    .map(r => ({ i: r.i, s: r.s, a: r.a,
+                 px: X(r.a.score), py: Y(r.a.anomaly_score),
+                 v: r.a.verdict || "indeterminable" }));
+  if (!ovPoints.length) {
+    ctx.textAlign = "center"; ctx.fillStyle = "#9aa3b2";
+    ctx.fillText("Pas de modèle d'anomalie pour " + FAMILY_LABEL[state.target].toLowerCase(),
+                 CM.l + cw / 2, CM.t + ch / 2);
+    return;
+  }
+  for (const v of [...OV_ORDER].reverse()) {
+    ctx.fillStyle = VERDICT_HEX[v];
+    ctx.globalAlpha = v === "RAS" ? 0.3 : 0.9;
+    for (const p of ovPoints) {
+      if (p.v !== v) continue;
+      ctx.beginPath();
+      ctx.arc(p.px, p.py, v === "RAS" ? 4 : 5.5, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function ovNearest(e) {
+  const cv = el("ov-canvas"), r = cv.getBoundingClientRect();
+  const mx = (e.clientX - r.left) * cv.width / r.width;
+  const my = (e.clientY - r.top) * cv.height / r.height;
+  let best = null, bd = 16 * 16;
+  for (const p of ovPoints) {
+    const dx = p.px - mx, dy = p.py - my, d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best;
+}
+
+function initOverview() {
+  const open = () => { renderOverview(); el("overview").classList.add("open"); };
+  const close = () => { el("overview").classList.remove("open"); ovTipHide(); };
+  el("open-overview").addEventListener("click", open);
+  el("overview-close").addEventListener("click", close);
+  el("overview").addEventListener("click", (e) => {
+    if (e.target === el("overview")) close();
+  });
+  el("ov-histo").addEventListener("mousemove", (e) => {
+    const rect = e.target.closest("rect[data-bin]");
+    if (!rect) { ovTipHide(); return; }
+    const b = Number(rect.dataset.bin);
+    ovTip("<b>Score " + b * 5 + "–" + (b * 5 + 5) + "</b><br>" + rect.dataset.n + " sessions",
+          e.clientX, e.clientY);
+  });
+  el("ov-histo").addEventListener("mouseleave", ovTipHide);
+  el("ov-canvas").addEventListener("mousemove", (e) => {
+    const p = ovNearest(e);
+    if (!p) { ovTipHide(); return; }
+    ovTip("<b>" + p.s.player + "</b> · " + p.s.date + "<br>V1 " + p.a.score +
+      " · écart " + p.a.anomaly_score + "<br><span style=\"color:" + VERDICT_HEX[p.v] +
+      "\">●</span> " + VERDICT_STYLE[p.v][1], e.clientX, e.clientY);
+  });
+  el("ov-canvas").addEventListener("mouseleave", ovTipHide);
+  el("ov-canvas").addEventListener("click", (e) => {
+    const p = ovNearest(e);
+    if (!p) return;
+    close();
+    el("session-select").value = p.i;
+    selectSession(p.i);
+  });
+}
+
 let rafPending = false;
 function scheduleRender() {
   if (rafPending) return;
@@ -1038,7 +1253,11 @@ function initControls() {
     if (e.target === el("modal")) el("modal").classList.remove("open");
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") el("modal").classList.remove("open");
+    if (e.key === "Escape") {
+      el("modal").classList.remove("open");
+      el("overview").classList.remove("open");
+      ovTipHide();
+    }
   });
 }
 
@@ -1067,6 +1286,7 @@ el("reset-range").addEventListener("click", () => {
 });
 
 initControls();
+initOverview();
 selectSession(0);
 </script>
 </body>
