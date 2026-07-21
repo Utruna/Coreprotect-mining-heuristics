@@ -6,6 +6,7 @@ from xray_detector.config import load_config
 from xray_detector.mining import (
     filter_cave_like_sessions,
     is_cave_like_session,
+    is_cave_shaped_session,
     parse_utc_datetime,
     segment_sessions,
 )
@@ -162,3 +163,30 @@ def test_cave_like_session_filter_detects_natural_cavities():
 
     assert excluded == 1
     assert kept["session_id"].tolist() == [1, 1, 1, 1, 1, 1]
+
+
+def _shape_session(n: int, ore_every: int, walk_every: int | None, seconds_per_block: float):
+    """Session synthetique : un bloc par pas, minerai tous les `ore_every` blocs,
+    un saut de marche (> 4 blocs) tous les `walk_every` pas si demande."""
+    rows = []
+    x = 0
+    for i in range(n):
+        x += 10 if (walk_every and i and i % walk_every == 0) else 1
+        rows.append({
+            "time": int(i * seconds_per_block), "x": x, "y": 12, "z": 0,
+            "ore": "diamond" if i % ore_every == 0 else None,
+        })
+    return pd.DataFrame(rows)
+
+
+def test_cave_shaped_session_detects_walked_ore_rich_cavity():
+    # Grotte : 1 minerai visible sur 4, un pas de marche sur 8, rythme lent.
+    cave = _shape_session(120, ore_every=4, walk_every=8, seconds_per_block=3.0)
+    assert is_cave_shaped_session(cave)
+
+
+def test_cave_shaped_session_keeps_fast_digging_even_with_high_yield():
+    # X-ray : rendement eleve aussi, mais creusage rapide et continu (sans
+    # marche) sur une grosse session -> ne doit PAS etre ecarte comme grotte.
+    xray = _shape_session(600, ore_every=5, walk_every=None, seconds_per_block=0.8)
+    assert not is_cave_shaped_session(xray)

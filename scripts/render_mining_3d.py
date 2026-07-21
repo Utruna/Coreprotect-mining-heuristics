@@ -427,8 +427,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums;
   }
   #copy-tp { white-space: nowrap; }
-  #copy-tp.copied { border-color: #0ca30c; color: #7fd67f; }
+  #copy-tp.copied, #anno-export.copied { border-color: #0ca30c; color: #7fd67f; }
 
+  /* Mode annotation (page generee avec --annotation) */
+  .anno-row { display: flex; gap: 6px; }
+  .anno-row + .anno-row { margin-top: 6px; }
+  .anno-row button { flex: 1 1 0; }
+  .anno-row button.on[data-v="legit"] { border-color: var(--good); color: var(--good); }
+  .anno-row button.on[data-v="suspect"] { border-color: var(--warn); color: var(--warn); }
+  .anno-row button.on[data-v="triche"] { border-color: var(--crit); color: var(--crit); }
+  #anno-grotte.on { border-color: var(--accent); color: var(--accent); }
+  #anno-export { width: 100%; margin-top: 8px; }
+  .rank-row .anno-mark { font-size: 12px; flex: 0 0 auto; }
+
+  .rank-controls { display: flex; gap: 6px; margin-bottom: 8px; }
+  .rank-controls input[type="search"] {
+    flex: 1 1 auto; min-width: 0;
+    background: var(--raised); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 8px; padding: 5px 9px; font: inherit;
+  }
+  .rank-controls select { flex: 0 0 auto; max-width: 130px; }
   .rank { display: flex; flex-direction: column; gap: 6px; }
   .rank-row {
     display: flex; align-items: center; gap: 10px; padding: 8px 10px;
@@ -552,8 +570,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <button id="copy-tp" title="Copier la commande de teleportation vers le centre de la zone minee">Copier /tp</button>
       </div>
     </div>
+    <div id="annotation-section" hidden>
+      <div class="section-title">Annotation de la session</div>
+      <div class="anno-row">
+        <button data-v="legit">Legit</button>
+        <button data-v="suspect">Suspect</button>
+        <button data-v="triche">Triche</button>
+      </div>
+      <div class="anno-row">
+        <button id="anno-grotte" title="Tag special, cumulable avec le verdict : la session est une grotte / cavite naturelle">Grotte</button>
+      </div>
+      <button id="anno-export" title="Copie/telecharge les annotations au format data/labels/session_labels.csv">Exporter CSV</button>
+    </div>
     <div>
       <div class="section-title">Classement des sessions</div>
+      <div class="rank-controls">
+        <input type="search" id="rank-search" placeholder="Chercher un joueur…"
+               aria-label="Filtrer le classement par joueur">
+        <select id="rank-sort" aria-label="Indicateur de tri du classement">
+          <option value="score">Score V1</option>
+          <option value="anomaly">Écart au corpus</option>
+          <option value="mix">Mix V1 + écart</option>
+          <option value="blocks">Blocs cassés</option>
+          <option value="duration">Durée</option>
+        </select>
+      </div>
       <div class="rank" id="rank"></div>
     </div>
     <div class="footnote">
@@ -657,7 +698,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div id="overview">
   <div class="modal-card wide">
     <div class="modal-head">
-      <h2>Vue d'ensemble — <span id="ov-target"></span></h2>
+      <div style="display:flex; align-items:center; gap:12px">
+        <h2>Vue d'ensemble</h2>
+        <select id="ov-ore" aria-label="Minerai analysé dans la vue d'ensemble"></select>
+      </div>
       <button id="overview-close">Fermer</button>
     </div>
     <p id="ov-summary"></p>
@@ -688,7 +732,8 @@ const DATA = /*__DATA_JSON__*/;
 
 const el = (id) => document.getElementById(id);
 const plotDiv = el("plot");
-const state = { i: 0, tA: 0, tB: 0, target: "diamond", hidden: new Set() };
+const state = { i: 0, tA: 0, tB: 0, target: "diamond", hidden: new Set(),
+                rankSort: "score", rankQuery: "" };
 if (!DATA.presentFamilies.includes(state.target)) state.target = DATA.presentFamilies[0];
 
 const FAMILY_LABEL = {}, FAMILY_INDEX = {};
@@ -961,19 +1006,54 @@ function renderPanel() {
   el("tiles").innerHTML = tiles.map(([v, name]) =>
     "<div class=\"tile\"><b>" + v + "</b><span>" + name + "</span></div>").join("");
 
-  const order = DATA.sessions.map((s, i) => [i, (s.analysis[state.target] || {}).score])
+  renderRank();
+}
+
+// Valeur de tri / affichage du classement selon l'indicateur choisi.
+// "mix" = moyenne des deux regards (V1 et ecart au corpus) quand les deux existent.
+function rankValue(a) {
+  const s = a.score, an = a.anomaly_score;
+  switch (state.rankSort) {
+    case "anomaly": return an ?? null;
+    case "mix":
+      if (s !== null && s !== undefined && an !== null && an !== undefined)
+        return Math.round((s + an) / 2 * 10) / 10;
+      return s ?? an ?? null;
+    case "blocks": return a.n_blocks ?? null;
+    case "duration": return a.duration_min ?? null;
+    default: return s ?? null;
+  }
+}
+
+function renderRank() {
+  const q = state.rankQuery.trim().toLowerCase();
+  const order = DATA.sessions
+    .map((s, i) => [i, rankValue(s.analysis[state.target] || {})])
+    .filter(([i]) => !q || DATA.sessions[i].player.toLowerCase().includes(q))
     .sort((a, b) => (b[1] ?? -1) - (a[1] ?? -1));
-  el("rank").innerHTML = order.map(([i, sc]) => {
+  const ANNO_MARK = { legit: ["✓", "var(--good)"], suspect: ["?", "var(--warn)"],
+                      triche: ["✗", "var(--crit)"] };
+  el("rank").innerHTML = order.map(([i, val]) => {
     const s = DATA.sessions[i];
     const v = (s.analysis[state.target] || {}).verdict;
     const [c] = VERDICT_STYLE[v] || VERDICT_STYLE["indeterminable"];
+    let mark = "";
+    if (DATA.annotation) {
+      const anno = annoGet(s);
+      const m = ANNO_MARK[anno.label];
+      mark = (m ? "<span class=\"anno-mark\" style=\"color:" + m[1] + "\" title=\"" +
+              anno.label + "\">" + m[0] + "</span>" : "") +
+             (anno.grotte ? "<span class=\"anno-mark\" style=\"color:var(--accent)\" " +
+              "title=\"grotte\">G</span>" : "");
+    }
     return "<div class=\"rank-row" + (i === state.i ? " active" : "") +
       "\" data-i=\"" + i + "\"><div class=\"who\"><b>" + s.player + "</b><span>" +
       fmtTime(s.t0) + " → " + fmtTime(s.t1) + " · " + s.world +
-      "</span></div><span class=\"chip\" style=\"color:" + c +
+      "</span></div>" + mark + "<span class=\"chip\" style=\"color:" + c +
       ";background:color-mix(in srgb, " + c + " 16%, transparent)\">" +
-      (sc === null || sc === undefined ? "—" : sc) + "</span></div>";
-  }).join("");
+      (val === null || val === undefined ? "—" : val) + "</span></div>";
+  }).join("") ||
+    "<div class=\"footnote\">Aucun joueur ne correspond à « " + state.rankQuery + " ».</div>";
   for (const row of el("rank").querySelectorAll(".rank-row")) {
     row.addEventListener("click", () => {
       const i = Number(row.dataset.i);
@@ -991,6 +1071,7 @@ const VERDICT_HEX = {
 };
 const OV_ORDER = ["fortement suspect", "a surveiller", "indeterminable", "RAS"];
 let ovPoints = [];
+let ovOre = null; // minerai de la vue d'ensemble, independant du panneau lateral
 
 function ovTip(html, x, y) {
   const tip = el("ov-tip");
@@ -1002,16 +1083,17 @@ function ovTip(html, x, y) {
 function ovTipHide() { el("ov-tip").style.display = "none"; }
 
 function renderOverview() {
-  const rows = DATA.sessions.map((s, i) => ({ i, s, a: s.analysis[state.target] || {} }));
+  if (!ovOre || !DATA.presentFamilies.includes(ovOre)) ovOre = state.target;
+  const rows = DATA.sessions.map((s, i) => ({ i, s, a: s.analysis[ovOre] || {} }));
   const scored = rows.filter(r => r.a.score !== null && r.a.score !== undefined);
   const counts = {};
   for (const r of rows) {
     const v = r.a.verdict || "indeterminable";
     counts[v] = (counts[v] || 0) + 1;
   }
-  el("ov-target").textContent = FAMILY_LABEL[state.target].toLowerCase();
-  el("ov-summary").textContent = rows.length + " sessions analysées (score sur la " +
-    "session entière, indépendant de la fenêtre temporelle).";
+  el("ov-summary").textContent = rows.length + " sessions analysées, minerai surveillé : " +
+    FAMILY_LABEL[ovOre].toLowerCase() + " (score sur la session entière, indépendant " +
+    "de la fenêtre temporelle).";
   el("ov-legend").innerHTML = OV_ORDER.filter(v => counts[v]).map(v =>
     "<span><span class=\"sw\" style=\"background:" + VERDICT_HEX[v] + "\"></span>" +
     VERDICT_STYLE[v][1] + " <b>" + counts[v] + "</b></span>").join("");
@@ -1077,7 +1159,7 @@ function renderOverview() {
                  v: r.a.verdict || "indeterminable" }));
   if (!ovPoints.length) {
     ctx.textAlign = "center"; ctx.fillStyle = "#9aa3b2";
-    ctx.fillText("Pas de modèle d'anomalie pour " + FAMILY_LABEL[state.target].toLowerCase(),
+    ctx.fillText("Pas de modèle d'anomalie pour " + FAMILY_LABEL[ovOre].toLowerCase(),
                  CM.l + cw / 2, CM.t + ch / 2);
     return;
   }
@@ -1107,7 +1189,20 @@ function ovNearest(e) {
 }
 
 function initOverview() {
-  const open = () => { renderOverview(); el("overview").classList.add("open"); };
+  const oreSel = el("ov-ore");
+  for (const key of DATA.presentFamilies) {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = FAMILY_LABEL[key];
+    oreSel.appendChild(opt);
+  }
+  oreSel.addEventListener("change", () => { ovOre = oreSel.value; renderOverview(); });
+  const open = () => {
+    ovOre = ovOre || state.target;
+    oreSel.value = ovOre;
+    renderOverview();
+    el("overview").classList.add("open");
+  };
   const close = () => { el("overview").classList.remove("open"); ovTipHide(); };
   el("open-overview").addEventListener("click", open);
   el("overview-close").addEventListener("click", close);
@@ -1175,6 +1270,7 @@ function selectSession(i) {
   render();
   renderPanel();
   renderLocation(S);
+  renderAnnotation();
 }
 
 function tpTarget(S) {
@@ -1193,21 +1289,112 @@ function renderLocation(S) {
   btn.textContent = "Copier /tp";
 }
 
+// Copie dans le presse-papier avec retour visuel sur le bouton, et prompt en secours.
+function copyWithFeedback(btnId, text, doneLabel, idleLabel) {
+  const done = () => {
+    const btn = el(btnId);
+    btn.classList.add("copied");
+    btn.textContent = doneLabel;
+    setTimeout(() => { btn.classList.remove("copied"); btn.textContent = idleLabel; }, 1600);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, () => window.prompt("A copier :", text));
+  } else {
+    window.prompt("A copier :", text);
+  }
+}
+
+// --- Mode annotation (page generee avec --annotation) ---
+// Verdict exclusif legit / suspect / triche + tag "grotte" cumulable, persistes en
+// localStorage (cle stable pseudo|monde|debut, independante des session_id).
+const ANNO_PREFIX = "xray-anno::";
+const isoTs = (ts) => new Date(ts * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+const annoKey = (S) => ANNO_PREFIX + S.player + "|" + S.world + "|" + S.t0;
+
+function annoGet(S) {
+  try { return JSON.parse(localStorage.getItem(annoKey(S))) || {}; }
+  catch { return {}; }
+}
+
+function annoSet(S, anno) {
+  if (!anno.label && !anno.grotte) {
+    localStorage.removeItem(annoKey(S));
+  } else {
+    localStorage.setItem(annoKey(S), JSON.stringify({
+      player: S.player, world: S.world, t0: S.t0, t1: S.t1,
+      label: anno.label || "", grotte: !!anno.grotte,
+    }));
+  }
+}
+
+function annoCount() {
+  let n = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    if (localStorage.key(i).startsWith(ANNO_PREFIX)) n++;
+  }
+  return n;
+}
+
+function renderAnnotation() {
+  if (!DATA.annotation) return;
+  const anno = annoGet(DATA.sessions[state.i]);
+  for (const btn of document.querySelectorAll("#annotation-section [data-v]")) {
+    btn.classList.toggle("on", anno.label === btn.dataset.v);
+  }
+  el("anno-grotte").classList.toggle("on", !!anno.grotte);
+  el("anno-export").textContent = "Exporter CSV (" + annoCount() + " annotées)";
+}
+
+function annoExport() {
+  const lines = ["pseudo,world,start_utc,end_utc,label,tags"];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key.startsWith(ANNO_PREFIX)) continue;
+    try {
+      const a = JSON.parse(localStorage.getItem(key));
+      lines.push([a.player, a.world, isoTs(a.t0), isoTs(a.t1), a.label || "",
+                  a.grotte ? "grotte" : ""].join(","));
+    } catch {}
+  }
+  const csv = lines.join("\n") + "\n";
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = "session_labels_export.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  copyWithFeedback("anno-export", csv, "Exporté + copié !",
+                   "Exporter CSV (" + (lines.length - 1) + " annotées)");
+}
+
+function initAnnotation() {
+  if (!DATA.annotation) return;
+  el("annotation-section").hidden = false;
+  for (const btn of document.querySelectorAll("#annotation-section [data-v]")) {
+    btn.addEventListener("click", () => {
+      const S = DATA.sessions[state.i];
+      const anno = annoGet(S);
+      anno.label = anno.label === btn.dataset.v ? "" : btn.dataset.v;
+      annoSet(S, anno);
+      renderAnnotation();
+      renderRank();
+    });
+  }
+  el("anno-grotte").addEventListener("click", () => {
+    const S = DATA.sessions[state.i];
+    const anno = annoGet(S);
+    anno.grotte = !anno.grotte;
+    annoSet(S, anno);
+    renderAnnotation();
+    renderRank();
+  });
+  el("anno-export").addEventListener("click", annoExport);
+}
+
 function copyTpCommand() {
   const S = DATA.sessions[state.i];
   const p = tpTarget(S);
-  const cmd = "/tppos @p " + p.x + " " + p.y + " " + p.z;
-  const done = () => {
-    const btn = el("copy-tp");
-    btn.classList.add("copied");
-    btn.textContent = "Copié !";
-    setTimeout(() => { btn.classList.remove("copied"); btn.textContent = "Copier /tp"; }, 1600);
-  };
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(cmd).then(done, () => window.prompt("Commande :", cmd));
-  } else {
-    window.prompt("Commande :", cmd);
-  }
+  copyWithFeedback("copy-tp", "/tppos @p " + p.x + " " + p.y + " " + p.z,
+                   "Copié !", "Copier /tp");
 }
 
 function initControls() {
@@ -1240,6 +1427,15 @@ function initControls() {
     state.target = ore.value;
     render();
     renderPanel();
+  });
+
+  el("rank-search").addEventListener("input", (e) => {
+    state.rankQuery = e.target.value;
+    renderRank();
+  });
+  el("rank-sort").addEventListener("change", (e) => {
+    state.rankSort = e.target.value;
+    renderRank();
   });
 
   el("toggle-panel").addEventListener("click", () => {
@@ -1287,6 +1483,7 @@ el("reset-range").addEventListener("click", () => {
 
 initControls();
 initOverview();
+initAnnotation();
 selectSession(0);
 </script>
 </body>
@@ -1354,6 +1551,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Remplace les pseudos par des pseudos inventes (partage public).",
     )
     parser.add_argument(
+        "--annotation",
+        action="store_true",
+        help="Ajoute le mode annotation : verdict legit/suspect/triche + tag grotte "
+             "par session, persiste dans le navigateur, export CSV vers data/labels/.",
+    )
+    parser.add_argument(
       "--include-cave-sessions",
       action="store_true",
       help="Garde aussi les sessions qui ressemblent a des cavernes / geodes naturelles.",
@@ -1407,6 +1610,7 @@ def main(argv: list[str] | None = None) -> int:
 
     t1 = time.perf_counter()
     payload = build_payload(df, worlds)
+    payload["annotation"] = bool(args.annotation)
     write_html(payload, args.output)
     t_render = time.perf_counter() - t1
 

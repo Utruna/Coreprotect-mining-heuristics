@@ -41,24 +41,55 @@ from xray_detector.mining import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODELS_DIR = PROJECT_ROOT / "data" / "models"
+DEFAULT_LABELS = PROJECT_ROOT / "data" / "labels" / "session_labels.csv"
 
 
 def build_feature_table_from_db(args: argparse.Namespace) -> pd.DataFrame:
     """Rejoue le pipeline d'analyse (memes filtres que analyze_mining_sessions)."""
     start_ts = int(parse_utc_datetime(args.start).timestamp()) if args.start else None
     end_ts = int(parse_utc_datetime(args.end).timestamp()) if args.end else None
-    df, _worlds = load_breaks(args.db, start_ts=start_ts, end_ts=end_ts)
+    df, worlds = load_breaks(args.db, start_ts=start_ts, end_ts=end_ts)
     if df.empty:
         raise SystemExit("Aucun bloc casse dans la fenetre demandee.")
     df, _ = segment_sessions(df, gap_seconds=args.gap, min_blocks=args.min_blocks)
     df, cave_dropped = filter_cave_like_sessions(df)
     if cave_dropped:
         print(f"Sessions exclues car ressemblant a des grottes/geodes : {cave_dropped}")
+    iso = lambda ts: pd.Timestamp(int(ts), unit="s", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
     rows = []
-    for (pseudo, _wid, _sid), seg in df.groupby(["pseudo", "wid", "session_id"], sort=True):
+    for (pseudo, wid, _sid), seg in df.groupby(["pseudo", "wid", "session_id"], sort=True):
         features = compute_session_features(seg, target=args.ore)
-        rows.append({"pseudo": pseudo, **features, **score_session(features, target=args.ore)})
+        rows.append({"pseudo": pseudo, "world": worlds.get(wid, f"monde {wid}"),
+                     "start_utc": iso(seg["time"].min()),
+                     **features, **score_session(features, target=args.ore)})
     return pd.DataFrame(rows)
+
+
+def exclude_labeled_sessions(
+    table: pd.DataFrame, labels_path: Path, exclude: list[str]
+) -> tuple[pd.DataFrame, int]:
+    """Retire du corpus les sessions verifiees a la main (data/labels/).
+
+    L'Isolation Forest apprend « la session typique » : laisser les sessions de
+    triche confirmees dans le corpus lui apprendrait que le x-ray est typique.
+    Appariement sur (pseudo, world, start_utc), la seule cle stable entre runs.
+    """
+    if not labels_path.exists():
+        return table, 0
+    labels = pd.read_csv(labels_path)
+    bad = labels[labels["label"].isin(exclude)]
+    if bad.empty:
+        return table, 0
+    keys = {"pseudo", "world", "start_utc"}
+    if not keys <= set(table.columns):
+        print(f"Attention : le corpus n'a pas les colonnes {sorted(keys)} — "
+              f"exclusion des sessions etiquetees impossible (CSV trop ancien ? "
+              f"regenerer avec analyze_mining_sessions.py).")
+        return table, 0
+    merged = table.merge(bad[sorted(keys)].drop_duplicates(), on=sorted(keys),
+                         how="left", indicator=True)
+    kept = merged[merged["_merge"] == "left_only"].drop(columns="_merge")
+    return kept.reset_index(drop=True), len(table) - len(kept)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -82,6 +113,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=None,
                         help="Fichier joblib de sortie "
                              "(defaut : data/models/anomaly_iforest_<ore>.joblib).")
+    parser.add_argument("--labels", type=Path, default=DEFAULT_LABELS,
+                        help="CSV d'annotations manuelles dont les sessions triche/suspect "
+                             f"sont exclues du corpus (defaut : {DEFAULT_LABELS} ; "
+                             "ignore s'il n'existe pas).")
+    parser.add_argument("--exclude-labels", default="triche,suspect",
+                        help="Etiquettes a exclure du corpus, separees par des virgules "
+                             "(defaut : triche,suspect).")
+    parser.add_argument("--no-labels", action="store_true",
+                        help="Ne pas exclure les sessions etiquetees.")
     args = parser.parse_args(argv)
     if args.output is None:
         args.output = MODELS_DIR / f"anomaly_iforest_{args.ore}.joblib"
@@ -96,6 +136,9 @@ def main(argv: list[str] | None = None) -> int:
         if not args.from_csv.exists():
             raise SystemExit(f"CSV introuvable : {args.from_csv}")
         table = pd.read_csv(args.from_csv)
+        # Le CSV d'analyse peut deja porter les colonnes anomaly_* d'un modele
+        # precedent : on les ecarte pour ne pas les dupliquer au re-scoring.
+        table = table.drop(columns=[c for c in table.columns if c.startswith("anomaly_")])
         if "target" in table.columns and not (table["target"] == args.ore).all():
             raise SystemExit(
                 f"Le CSV contient des features calculees pour "
@@ -108,9 +151,18 @@ def main(argv: list[str] | None = None) -> int:
         table = build_feature_table_from_db(args)
         source_label = f"{args.db} [{args.start or 'debut'} -> {args.end or 'fin'}]"
 
+    n_excluded = 0
+    if not args.no_labels:
+        exclude = [lab.strip() for lab in args.exclude_labels.split(",") if lab.strip()]
+        table, n_excluded = exclude_labeled_sessions(table, args.labels, exclude)
+        if n_excluded:
+            print(f"Sessions etiquetees {exclude} exclues du corpus : {n_excluded} "
+                  f"({args.labels})")
+
     print(f"Corpus d'entrainement : {len(table)} sessions ({source_label})")
     model = train_anomaly_model(table, target=args.ore, contamination=args.contamination)
-    model.metadata = {"source": source_label, "trained_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    model.metadata = {"source": source_label, "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                      "labeled_sessions_excluded": n_excluded}
     save_model(model, args.output)
     print(f"Modele ecrit : {args.output}")
 

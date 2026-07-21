@@ -68,6 +68,7 @@ def feature_panels(target_label: str) -> list[tuple[str, str, float | None]]:
 
 
 def analyze(df: pd.DataFrame, worlds: dict[int, str], target: str) -> pd.DataFrame:
+    iso = lambda ts: pd.Timestamp(int(ts), unit="s", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
     rows = []
     for (pseudo, wid, sid), seg in df.groupby(["pseudo", "wid", "session_id"], sort=True):
         features = compute_session_features(seg, target=target)
@@ -76,6 +77,10 @@ def analyze(df: pd.DataFrame, worlds: dict[int, str], target: str) -> pd.DataFra
                 "pseudo": pseudo,
                 "world": worlds.get(wid, f"monde {wid}"),
                 "session": sid,
+                # Bornes temporelles : cle stable pour recouper avec les
+                # annotations (data/labels/) sans rejouer la segmentation.
+                "start_utc": iso(seg["time"].min()),
+                "end_utc": iso(seg["time"].max()),
                 "target": target,
                 **features,
                 **score_session(features, target=target),

@@ -1,3 +1,4 @@
+
 """Acces partage aux evenements de minage d'une base CoreProtect SQLite.
 
 Regles d'extraction identiques a scripts/extract_mining_events.py (version Postgres),
@@ -104,9 +105,25 @@ CAVE_SIGNATURE_MATERIALS = {
 }
 
 # Seuils choisis pour filtrer les sessions qui ressemblent fortement a de la
-# cavitation naturelle. Le ratio garde le filtre robuste sur les longues sessions.
-CAVE_SIGNATURE_MIN_BLOCKS = 10
+# cavitation naturelle. C'est le ratio qui decide : un seuil absolu qui declenche
+# seul ecarte a tort les longues sessions (10 blocs de mousse sur 8 000 casses ne
+# font pas une grotte — verifie sur un x-rayeur confirme dont les deux plus
+# grosses sessions etaient exclues a 0,3 % de signatures). Le seuil absolu ne
+# sert plus que de plancher d'evidence pour les sessions minuscules.
+CAVE_SIGNATURE_MIN_BLOCKS = 3
 CAVE_SIGNATURE_MIN_RATIO = 0.015
+
+# Signature « forme » d'une session de grotte, complementaire des materiaux :
+# enormement de minerais visibles ET (de la marche OU un rythme lent sur une
+# petite session). Un x-rayeur a aussi un rendement eleve, mais il creuse vite
+# et marche peu : les deux criteres de droite l'ecartent. Seuils calibres sur
+# les 54 sessions taguees « grotte » par la moderation (fev-avr 2026) :
+# 44/54 detectees, zero session etiquetee triche ou suspect exclue.
+CAVE_SHAPE_JUMP_DISTANCE = 4.0  # meme seuil de pas que features.JUMP_DISTANCE
+CAVE_SHAPE_MIN_ORE_PER_100 = 12.0
+CAVE_SHAPE_MIN_WALK_RATIO = 0.06
+CAVE_SHAPE_MAX_BLOCKS_PER_MIN = 35.0
+CAVE_SHAPE_MAX_BLOCKS = 300
 
 
 def ore_family(material: str) -> str | None:
@@ -127,6 +144,27 @@ def cave_signature_count(seg: pd.DataFrame) -> int:
     return int(seg["material"].isin(CAVE_SIGNATURE_MATERIALS).sum())
 
 
+def is_cave_shaped_session(seg: pd.DataFrame) -> bool:
+    """Detecte une session de grotte par sa forme (rendement + marche/rythme).
+
+    Attrape les cavites sans materiaux signature (grottes de pierre nue) que la
+    regle des materiaux rate. Sans les colonnes ore/x/y/z/time (tests, appels
+    partiels), la regle est simplement inactive.
+    """
+    n = len(seg)
+    if n < 2 or not {"ore", "x", "y", "z", "time"} <= set(seg.columns):
+        return False
+    if 100.0 * seg["ore"].notna().sum() / n < CAVE_SHAPE_MIN_ORE_PER_100:
+        return False
+    seg = seg.sort_values("time")
+    dists = seg[["x", "y", "z"]].astype(float).diff().iloc[1:].pow(2).sum(axis=1).pow(0.5)
+    if float((dists > CAVE_SHAPE_JUMP_DISTANCE).mean()) >= CAVE_SHAPE_MIN_WALK_RATIO:
+        return True
+    duration_min = (seg["time"].iloc[-1] - seg["time"].iloc[0]) / 60
+    blocks_per_min = n / duration_min if duration_min else float("inf")
+    return blocks_per_min <= CAVE_SHAPE_MAX_BLOCKS_PER_MIN and n <= CAVE_SHAPE_MAX_BLOCKS
+
+
 def is_cave_like_session(
     seg: pd.DataFrame,
     min_signature_blocks: int = CAVE_SIGNATURE_MIN_BLOCKS,
@@ -136,9 +174,9 @@ def is_cave_like_session(
     if seg.empty:
         return False
     signature_blocks = cave_signature_count(seg)
-    return signature_blocks >= min_signature_blocks or (
-        signature_blocks / len(seg)
-    ) >= min_signature_ratio
+    if signature_blocks >= max(min_signature_blocks, min_signature_ratio * len(seg)):
+        return True
+    return is_cave_shaped_session(seg)
 
 
 def filter_cave_like_sessions(
