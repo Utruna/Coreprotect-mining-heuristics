@@ -23,6 +23,7 @@ build/
 !/data/processed/.gitkeep
 /reports/figures/*
 !/reports/figures/.gitkeep
+./data/labels/*
 
 # Local VS Code state
 .vscode/*.log
