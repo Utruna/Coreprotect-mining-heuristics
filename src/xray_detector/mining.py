@@ -202,6 +202,50 @@ def filter_cave_like_sessions(
     return df.loc[keep].copy(), excluded
 
 
+# Blocs de recolte de surface : bucheronnage (troncs, bois, feuilles) et
+# sable / gres. Une session composee principalement de ces blocs n'est pas du
+# minage : le score x-ray n'y a aucun sens, on l'ecarte de l'analyse.
+SURFACE_GATHER_MIN_RATIO = 0.5
+
+
+def surface_gather_count(seg: pd.DataFrame) -> int:
+    """Compte les blocs de recolte de surface (bois, sable, gres)."""
+    names = seg["material"].str.removeprefix("minecraft:")
+    return int(
+        (
+            names.str.endswith(("_log", "_wood", "_leaves"))
+            | names.isin(("sand", "red_sand"))
+            | names.str.contains("sandstone", regex=False)
+        ).sum()
+    )
+
+
+def is_surface_gathering_session(
+    seg: pd.DataFrame, min_ratio: float = SURFACE_GATHER_MIN_RATIO
+) -> bool:
+    """Detecte une session dominee par la recolte de surface (pas du minage)."""
+    if seg.empty:
+        return False
+    return surface_gather_count(seg) / len(seg) >= min_ratio
+
+
+def filter_surface_gathering_sessions(
+    df: pd.DataFrame, min_ratio: float = SURFACE_GATHER_MIN_RATIO
+) -> tuple[pd.DataFrame, int]:
+    """Ecarte les sessions dominees par la recolte de surface (bois, sable, gres)."""
+    if df.empty:
+        return df.copy(), 0
+
+    keep = pd.Series(True, index=df.index)
+    excluded = 0
+    for _, seg in df.groupby(["pseudo", "wid", "session_id"], sort=False):
+        if is_surface_gathering_session(seg, min_ratio=min_ratio):
+            keep.loc[seg.index] = False
+            excluded += 1
+
+    return df.loc[keep].copy(), excluded
+
+
 def _build_extraction_sql(start_ts: int | None = None, end_ts: int | None = None) -> tuple[str, dict[str, int]]:
     conditions = []
     params: dict[str, int] = {}

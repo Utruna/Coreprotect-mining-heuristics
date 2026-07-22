@@ -35,6 +35,7 @@ from xray_detector.mining import (
     ORE_FAMILIES,
     anonymize_players,
     filter_cave_like_sessions,
+    filter_surface_gathering_sessions,
     load_breaks,
     parse_utc_datetime,
     segment_sessions,
@@ -498,6 +499,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <body>
 <header>
   <div class="app-title">Minage 3D <span class="dim">- reconstruction &amp; analyse</span></div>
+  <div class="ctrl" id="world-ctrl">
+    <label for="world-select">Monde</label>
+    <select id="world-select"></select>
+  </div>
   <div class="ctrl">
     <label for="session-select">Session</label>
     <select id="session-select"></select>
@@ -733,7 +738,7 @@ const DATA = /*__DATA_JSON__*/;
 const el = (id) => document.getElementById(id);
 const plotDiv = el("plot");
 const state = { i: 0, tA: 0, tB: 0, target: "diamond", hidden: new Set(),
-                rankSort: "score", rankQuery: "" };
+                rankSort: "score", rankQuery: "", world: "" };
 if (!DATA.presentFamilies.includes(state.target)) state.target = DATA.presentFamilies[0];
 
 const FAMILY_LABEL = {}, FAMILY_INDEX = {};
@@ -1025,11 +1030,16 @@ function rankValue(a) {
   }
 }
 
+// Le selecteur de monde du bandeau filtre la liste des sessions, le classement
+// et la vue d'ensemble ("" = tous les mondes).
+const inWorld = (S) => !state.world || S.world === state.world;
+
 function renderRank() {
   const q = state.rankQuery.trim().toLowerCase();
   const order = DATA.sessions
     .map((s, i) => [i, rankValue(s.analysis[state.target] || {})])
-    .filter(([i]) => !q || DATA.sessions[i].player.toLowerCase().includes(q))
+    .filter(([i]) => inWorld(DATA.sessions[i]) &&
+      (!q || DATA.sessions[i].player.toLowerCase().includes(q)))
     .sort((a, b) => (b[1] ?? -1) - (a[1] ?? -1));
   const ANNO_MARK = { legit: ["✓", "var(--good)"], suspect: ["?", "var(--warn)"],
                       triche: ["✗", "var(--crit)"] };
@@ -1084,14 +1094,16 @@ function ovTipHide() { el("ov-tip").style.display = "none"; }
 
 function renderOverview() {
   if (!ovOre || !DATA.presentFamilies.includes(ovOre)) ovOre = state.target;
-  const rows = DATA.sessions.map((s, i) => ({ i, s, a: s.analysis[ovOre] || {} }));
+  const rows = DATA.sessions.map((s, i) => ({ i, s, a: s.analysis[ovOre] || {} }))
+    .filter(r => inWorld(r.s));
   const scored = rows.filter(r => r.a.score !== null && r.a.score !== undefined);
   const counts = {};
   for (const r of rows) {
     const v = r.a.verdict || "indeterminable";
     counts[v] = (counts[v] || 0) + 1;
   }
-  el("ov-summary").textContent = rows.length + " sessions analysées, minerai surveillé : " +
+  el("ov-summary").textContent = rows.length + " sessions analysées" +
+    (state.world ? " dans " + state.world : "") + ", minerai surveillé : " +
     FAMILY_LABEL[ovOre].toLowerCase() + " (score sur la session entière, indépendant " +
     "de la fenêtre temporelle).";
   el("ov-legend").innerHTML = OV_ORDER.filter(v => counts[v]).map(v =>
@@ -1397,11 +1409,12 @@ function copyTpCommand() {
                    "Copié !", "Copier /tp");
 }
 
-function initControls() {
-  el("copy-tp").addEventListener("click", copyTpCommand);
+function rebuildSessionSelect() {
   const sel = el("session-select");
+  sel.innerHTML = "";
   const groups = new Map();
   DATA.sessions.forEach((S, i) => {
+    if (!inWorld(S)) return;
     if (!groups.has(S.player)) {
       const og = document.createElement("optgroup");
       og.label = S.player;
@@ -1413,7 +1426,38 @@ function initControls() {
     opt.textContent = S.label;
     groups.get(S.player).appendChild(opt);
   });
+}
+
+function initControls() {
+  el("copy-tp").addEventListener("click", copyTpCommand);
+  const sel = el("session-select");
+  rebuildSessionSelect();
   sel.addEventListener("change", () => selectSession(Number(sel.value)));
+
+  const worlds = [...new Set(DATA.sessions.map((S) => S.world))].sort();
+  const wsel = el("world-select");
+  const allOpt = document.createElement("option");
+  allOpt.value = "";
+  allOpt.textContent = "Tous les mondes";
+  wsel.appendChild(allOpt);
+  for (const w of worlds) {
+    const opt = document.createElement("option");
+    opt.value = w;
+    opt.textContent = w;
+    wsel.appendChild(opt);
+  }
+  wsel.addEventListener("change", () => {
+    state.world = wsel.value;
+    rebuildSessionSelect();
+    if (!inWorld(DATA.sessions[state.i])) {
+      const first = DATA.sessions.findIndex(inWorld);
+      sel.value = first;
+      selectSession(first);
+    } else {
+      sel.value = state.i;
+      renderRank();
+    }
+  });
 
   const ore = el("ore-select");
   for (const key of DATA.presentFamilies) {
@@ -1561,6 +1605,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
       action="store_true",
       help="Garde aussi les sessions qui ressemblent a des cavernes / geodes naturelles.",
     )
+    parser.add_argument(
+        "--include-surface-sessions",
+        action="store_true",
+        help="Garde aussi les sessions dominees par la recolte de surface "
+             "(bois, sable, gres).",
+    )
     args = parser.parse_args(argv)
     if args.output is None:
         suffix = "_anon" if args.anonymize else ""
@@ -1605,6 +1655,11 @@ def main(argv: list[str] | None = None) -> int:
       df, cave_dropped = filter_cave_like_sessions(df)
       if cave_dropped:
         print(f"Sessions exclues car ressemblant a des grottes/geodes : {cave_dropped}")
+    if not args.include_surface_sessions:
+        df, surface_dropped = filter_surface_gathering_sessions(df)
+        if surface_dropped:
+            print(f"Sessions exclues car recolte de surface (bois/sable/gres) : "
+                  f"{surface_dropped}")
     if df.empty:
         raise SystemExit("Aucune session retenue avec ces seuils.")
 

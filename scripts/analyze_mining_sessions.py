@@ -26,6 +26,7 @@ from xray_detector.mining import (
     ORE_FAMILIES,
     anonymize_players,
     filter_cave_like_sessions,
+    filter_surface_gathering_sessions,
     load_breaks,
     parse_utc_datetime,
     segment_sessions,
@@ -236,6 +237,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Garde aussi les sessions qui ressemblent a des cavernes / geodes naturelles.",
     )
+    parser.add_argument(
+        "--include-surface-sessions",
+        action="store_true",
+        help="Garde aussi les sessions dominees par la recolte de surface "
+             "(bois, sable, gres).",
+    )
     args = parser.parse_args(argv)
     suffix = "_anon" if args.anonymize else ""
     if args.output is None:
@@ -281,6 +288,11 @@ def main(argv: list[str] | None = None) -> int:
         df, cave_dropped = filter_cave_like_sessions(df)
         if cave_dropped:
             print(f"Sessions exclues car ressemblant a des grottes/geodes : {cave_dropped}")
+    if not args.include_surface_sessions:
+        df, surface_dropped = filter_surface_gathering_sessions(df)
+        if surface_dropped:
+            print(f"Sessions exclues car recolte de surface (bois/sable/gres) : "
+                  f"{surface_dropped}")
     if df.empty:
         raise SystemExit("Aucune session retenue avec ces seuils.")
 
