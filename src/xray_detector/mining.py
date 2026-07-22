@@ -76,6 +76,38 @@ ORE_FAMILIES: dict[str, str] = {
     "ancient_debris": "Debris antiques",
 }
 
+# Dimensions ou chaque famille de minerai apparait naturellement. Sert a ne pas
+# scorer une session pour un minerai impossible dans son monde (un score diamant
+# au Nether n'a aucun sens et gonfle les comptes). L'or existe dans les deux
+# (nether_gold_ore est rabattu sur gold) ; l'End n'a aucun minerai.
+ORE_DIMENSIONS: dict[str, frozenset[str]] = {
+    "diamond": frozenset({"overworld"}),
+    "emerald": frozenset({"overworld"}),
+    "gold": frozenset({"overworld", "nether"}),
+    "redstone": frozenset({"overworld"}),
+    "lapis": frozenset({"overworld"}),
+    "copper": frozenset({"overworld"}),
+    "iron": frozenset({"overworld"}),
+    "coal": frozenset({"overworld"}),
+    "quartz": frozenset({"nether"}),
+    "ancient_debris": frozenset({"nether"}),
+}
+
+
+def world_dimension(world_name: str) -> str:
+    """Devine la dimension d'un monde a partir de son nom CoreProtect.
+
+    Convention des noms usuels : "world", "world_nether", "world_the_end"
+    (et leurs variantes prefixees par le nom du serveur).
+    """
+    name = world_name.lower()
+    if "nether" in name:
+        return "nether"
+    if "the_end" in name or name.endswith("_end") or name == "end":
+        return "end"
+    return "overworld"
+
+
 # Blocs typiques des cavernes / geodes / cavites naturelles, peu compatibles avec
 # l'hypothese d'un strip-mining en galerie reguliere. On s'en sert pour ecarter
 # les sessions qui ne sont pas dans le domaine d'analyse du score x-ray V1.
@@ -200,6 +232,21 @@ def filter_cave_like_sessions(
             excluded += 1
 
     return df.loc[keep].copy(), excluded
+
+
+def filter_end_world_sessions(
+    df: pd.DataFrame, worlds: dict[int, str]
+) -> tuple[pd.DataFrame, int]:
+    """Ecarte les sessions minees dans l'End : aucun minerai n'y apparait
+    (casser de l'endstone n'est jamais du x-ray), il n'y a rien a scorer."""
+    if df.empty:
+        return df.copy(), 0
+    end_wids = {wid for wid, name in worlds.items() if world_dimension(name) == "end"}
+    if not end_wids:
+        return df.copy(), 0
+    mask = df["wid"].isin(end_wids)
+    excluded = int(df.loc[mask].groupby(["pseudo", "wid", "session_id"]).ngroups)
+    return df.loc[~mask].copy(), excluded
 
 
 # Blocs de recolte de surface : bucheronnage (troncs, bois, feuilles) et

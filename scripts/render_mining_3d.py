@@ -32,13 +32,16 @@ import pandas as pd
 from xray_detector.anomaly_model import load_model, score_anomalies
 from xray_detector.features import compute_session_features, score_session
 from xray_detector.mining import (
+    ORE_DIMENSIONS,
     ORE_FAMILIES,
     anonymize_players,
     filter_cave_like_sessions,
+    filter_end_world_sessions,
     filter_surface_gathering_sessions,
     load_breaks,
     parse_utc_datetime,
     segment_sessions,
+    world_dimension,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -150,9 +153,14 @@ def build_payload(df: pd.DataFrame, worlds: dict[int, str]) -> dict:
         seg = seg.sort_values("time")
         t0, t1 = int(seg["time"].min()), int(seg["time"].max())
         n_ores = int(seg["ore"].notna().sum())
+        dimension = world_dimension(worlds.get(int(wid), f"monde {wid}"))
 
+        # Une session n'est scoree que pour les minerais possibles dans sa
+        # dimension : pas de score diamant au Nether ni ancient_debris ailleurs.
         analysis = {}
         for key in present:
+            if dimension not in ORE_DIMENSIONS[key]:
+                continue
             features = compute_session_features(seg, target=key)
             entry = {**features, **score_session(features, target=key)}
             if key in models:
@@ -937,8 +945,13 @@ function render() {
 
 function renderPanel() {
   const S = DATA.sessions[state.i];
+  // Session hors dimension du minerai surveille (ex. Nether pour le diamant) :
+  // aucune analyse n'existe, le panneau l'explique au lieu d'afficher du vide.
+  const offDim = !(state.target in S.analysis);
   const A = S.analysis[state.target] || {};
-  const [color, verdictText] = VERDICT_STYLE[A.verdict] || VERDICT_STYLE["indeterminable"];
+  const [color, verdictText] = offDim
+    ? ["var(--ink-3)", "minerai absent de ce monde"]
+    : (VERDICT_STYLE[A.verdict] || VERDICT_STYLE["indeterminable"]);
   const label = FAMILY_LABEL[state.target];
 
   const score = (A.score === null || A.score === undefined) ? null : A.score;
@@ -1039,6 +1052,7 @@ function renderRank() {
   const order = DATA.sessions
     .map((s, i) => [i, rankValue(s.analysis[state.target] || {})])
     .filter(([i]) => inWorld(DATA.sessions[i]) &&
+      (state.target in DATA.sessions[i].analysis) &&
       (!q || DATA.sessions[i].player.toLowerCase().includes(q)))
     .sort((a, b) => (b[1] ?? -1) - (a[1] ?? -1));
   const ANNO_MARK = { legit: ["✓", "var(--good)"], suspect: ["?", "var(--warn)"],
@@ -1063,7 +1077,9 @@ function renderRank() {
       ";background:color-mix(in srgb, " + c + " 16%, transparent)\">" +
       (val === null || val === undefined ? "—" : val) + "</span></div>";
   }).join("") ||
-    "<div class=\"footnote\">Aucun joueur ne correspond à « " + state.rankQuery + " ».</div>";
+    "<div class=\"footnote\">" + (q
+      ? "Aucun joueur ne correspond à « " + state.rankQuery + " »."
+      : "Aucune session analysable pour ce minerai dans ce monde.") + "</div>";
   for (const row of el("rank").querySelectorAll(".rank-row")) {
     row.addEventListener("click", () => {
       const i = Number(row.dataset.i);
@@ -1095,7 +1111,7 @@ function ovTipHide() { el("ov-tip").style.display = "none"; }
 function renderOverview() {
   if (!ovOre || !DATA.presentFamilies.includes(ovOre)) ovOre = state.target;
   const rows = DATA.sessions.map((s, i) => ({ i, s, a: s.analysis[ovOre] || {} }))
-    .filter(r => inWorld(r.s));
+    .filter(r => inWorld(r.s) && (ovOre in r.s.analysis));
   const scored = rows.filter(r => r.a.score !== null && r.a.score !== undefined);
   const counts = {};
   for (const r of rows) {
@@ -1611,6 +1627,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Garde aussi les sessions dominees par la recolte de surface "
              "(bois, sable, gres).",
     )
+    parser.add_argument(
+        "--split",
+        choices=["monthly"],
+        default=None,
+        help="Genere une page par mois calendaire UTC au lieu d'une page unique "
+             "(demande --start et --end ; suffixe _AAAA-MM sur chaque fichier). "
+             "Indispensable sur une longue periode : une page unique de plusieurs "
+             "centaines de Mo ne charge pas dans un navigateur.",
+    )
     args = parser.parse_args(argv)
     if args.output is None:
         suffix = "_anon" if args.anonymize else ""
@@ -1618,24 +1643,48 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+def month_ranges(start_ts: int, end_ts: int) -> list[tuple[int, int, str]]:
+    """Decoupe [start_ts, end_ts] en mois calendaires UTC : (debut, fin, "AAAA-MM").
 
-    if not args.db.exists():
-        raise SystemExit(f"Base introuvable : {args.db}")
+    Les bornes de fin sont exclusives d'une seconde pour ne pas compter deux fois
+    l'evenement pile sur la frontiere (load_breaks filtre en time <= end).
+    """
+    ranges = []
+    cur = datetime.fromtimestamp(start_ts, tz=timezone.utc)
+    end = datetime.fromtimestamp(end_ts, tz=timezone.utc)
+    while cur < end:
+        nxt = (cur.replace(year=cur.year + 1, month=1) if cur.month == 12
+               else cur.replace(month=cur.month + 1))
+        nxt = nxt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        ranges.append((int(cur.timestamp()),
+                       min(int(nxt.timestamp()), end_ts) - 1,
+                       cur.strftime("%Y-%m")))
+        cur = nxt
+    return ranges
 
+
+def render_one(
+    args: argparse.Namespace,
+    start_ts: int | None,
+    end_ts: int | None,
+    output: Path,
+) -> int:
+    """Extrait, analyse et ecrit une page pour la fenetre donnee.
+
+    Retourne le nombre de sessions rendues (0 = aucune page ecrite).
+    """
     t0 = time.perf_counter()
-    start_ts, end_ts = requested_time_window(args)
     df, worlds = load_breaks(args.db, start_ts=start_ts, end_ts=end_ts)
     t_extract = time.perf_counter() - t0
     print(
         f"{len(df)} blocs casses par {df['pseudo'].nunique()} joueurs "
         f"charges depuis {args.db.name} en {t_extract:.1f} s"
     )
+    if df.empty:
+        print("Aucun evenement dans la fenetre temporelle demandee.")
+        return 0
 
     if start_ts is not None or end_ts is not None:
-        if df.empty:
-            raise SystemExit("Aucun evenement dans la fenetre temporelle demandee.")
         window_start = start_ts if start_ts is not None else int(df["time"].min())
         window_end = end_ts if end_ts is not None else int(df["time"].max())
         print(f"Fenetre temporelle: {fmt_date(window_start)} -> {fmt_date(window_end)}")
@@ -1651,6 +1700,9 @@ def main(argv: list[str] | None = None) -> int:
     df, dropped = segment_sessions(df, gap_seconds=args.gap, min_blocks=args.min_blocks)
     if dropped:
         print(f"Sessions ignorees (< {args.min_blocks} blocs) : {dropped}")
+    df, end_dropped = filter_end_world_sessions(df, worlds)
+    if end_dropped:
+        print(f"Sessions exclues car minees dans l'End (aucun minerai) : {end_dropped}")
     if not args.include_cave_sessions:
       df, cave_dropped = filter_cave_like_sessions(df)
       if cave_dropped:
@@ -1661,18 +1713,52 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Sessions exclues car recolte de surface (bois/sable/gres) : "
                   f"{surface_dropped}")
     if df.empty:
-        raise SystemExit("Aucune session retenue avec ces seuils.")
+        print("Aucune session retenue avec ces seuils.")
+        return 0
 
     t1 = time.perf_counter()
     payload = build_payload(df, worlds)
     payload["annotation"] = bool(args.annotation)
-    write_html(payload, args.output)
+    write_html(payload, output)
     t_render = time.perf_counter() - t1
 
-    size_mb = args.output.stat().st_size / (1024 * 1024)
-    print(f"Rendu ecrit : {args.output} ({size_mb:.1f} Mo)")
+    size_mb = output.stat().st_size / (1024 * 1024)
+    print(f"Rendu ecrit : {output} ({size_mb:.1f} Mo, "
+          f"{len(payload['sessions'])} sessions)")
     print(f"Temps : extraction {t_extract:.1f} s - analyse et rendu {t_render:.1f} s "
           f"- total {time.perf_counter() - t0:.1f} s")
+    return len(payload["sessions"])
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+
+    if not args.db.exists():
+        raise SystemExit(f"Base introuvable : {args.db}")
+
+    start_ts, end_ts = requested_time_window(args)
+
+    if args.split == "monthly":
+        if start_ts is None or end_ts is None:
+            raise SystemExit("--split monthly demande une fenetre bornee : "
+                             "--start ET --end (ou --window relative).")
+        if args.anonymize:
+            print("Attention : avec --split, le mapping d'anonymisation est "
+                  "recalcule par mois — un meme joueur peut changer de pseudo "
+                  "d'une page a l'autre.")
+        pages = 0
+        for m_start, m_end, tag in month_ranges(start_ts, end_ts):
+            print(f"\n=== {tag} ===")
+            output = args.output.with_stem(args.output.stem + "_" + tag)
+            if render_one(args, m_start, m_end, output):
+                pages += 1
+        if not pages:
+            raise SystemExit("Aucune page generee sur la periode demandee.")
+        print(f"\n{pages} page(s) generee(s).")
+        return 0
+
+    if not render_one(args, start_ts, end_ts, args.output):
+        raise SystemExit("Aucune session retenue dans la fenetre demandee.")
     return 0
 
 

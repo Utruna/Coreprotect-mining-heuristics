@@ -25,8 +25,11 @@ from xray_detector.features import compute_session_features, score_session
 from xray_detector.mining import (
     ORE_FAMILIES,
     anonymize_players,
+    ORE_DIMENSIONS,
     filter_cave_like_sessions,
+    filter_end_world_sessions,
     filter_surface_gathering_sessions,
+    world_dimension,
     load_breaks,
     parse_utc_datetime,
     segment_sessions,
@@ -71,7 +74,13 @@ def feature_panels(target_label: str) -> list[tuple[str, str, float | None]]:
 def analyze(df: pd.DataFrame, worlds: dict[int, str], target: str) -> pd.DataFrame:
     iso = lambda ts: pd.Timestamp(int(ts), unit="s", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
     rows = []
+    skipped_dim = 0
     for (pseudo, wid, sid), seg in df.groupby(["pseudo", "wid", "session_id"], sort=True):
+        # Pas de score pour un minerai impossible dans la dimension de la session
+        # (diamant au Nether, ancient_debris ailleurs...).
+        if world_dimension(worlds.get(wid, f"monde {wid}")) not in ORE_DIMENSIONS[target]:
+            skipped_dim += 1
+            continue
         features = compute_session_features(seg, target=target)
         rows.append(
             {
@@ -87,6 +96,10 @@ def analyze(df: pd.DataFrame, worlds: dict[int, str], target: str) -> pd.DataFra
                 **score_session(features, target=target),
             }
         )
+    if skipped_dim:
+        print(f"Sessions hors dimension du minerai cible (non scorees) : {skipped_dim}")
+    if not rows:
+        return pd.DataFrame()
     return pd.DataFrame(rows).sort_values("score", ascending=False).reset_index(drop=True)
 
 
@@ -284,6 +297,9 @@ def main(argv: list[str] | None = None) -> int:
     df, dropped = segment_sessions(df, gap_seconds=args.gap, min_blocks=args.min_blocks)
     if dropped:
         print(f"Sessions ignorees (< {args.min_blocks} blocs) : {dropped}")
+    df, end_dropped = filter_end_world_sessions(df, worlds)
+    if end_dropped:
+        print(f"Sessions exclues car minees dans l'End (aucun minerai) : {end_dropped}")
     if not args.include_cave_sessions:
         df, cave_dropped = filter_cave_like_sessions(df)
         if cave_dropped:
@@ -300,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Minerai surveille : {target_label.lower()} ({args.ore})")
 
     table = analyze(df, worlds, target=args.ore)
+    if table.empty:
+        raise SystemExit("Aucune session dans une dimension compatible avec ce minerai.")
     table = add_anomaly_scores(table, args.anomaly_model, target=args.ore)
     print_report(table)
 
