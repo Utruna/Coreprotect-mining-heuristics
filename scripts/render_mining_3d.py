@@ -842,10 +842,12 @@ function buildTraces(S) {
     const dy = S.y[current] - S.y[previous];
     const dz = S.z[current] - S.z[previous];
     const distance = Math.hypot(dx, dy, dz);
-    pathHover.x.push((S.x[previous] + S.x[current]) / 2);
-    pathHover.y.push((S.z[previous] + S.z[current]) / 2);
-    pathHover.z.push((S.y[previous] + S.y[current]) / 2);
-    pathHover.text.push("Distance : " + distance.toFixed(2) + " blocs");
+    for (let fraction = 0.1; fraction < 1; fraction += 0.1) {
+      pathHover.x.push(S.x[previous] + dx * fraction);
+      pathHover.y.push(S.z[previous] + dz * fraction);
+      pathHover.z.push(S.y[previous] + dy * fraction);
+      pathHover.text.push("Distance : " + distance.toFixed(2) + " blocs");
+    }
   }
 
   const traces = [];
@@ -866,7 +868,7 @@ function buildTraces(S) {
       type: "scatter3d", mode: "markers", name: "Distance entre blocs",
       x: pathHover.x, y: pathHover.y, z: pathHover.z, text: pathHover.text,
       hoverinfo: "text", showlegend: false,
-      marker: { size: 3, color: DATA.pathColor, opacity: 0.001 },
+      marker: { size: 12, color: DATA.pathColor, opacity: 0.001 },
     });
   }
   for (const [fi, b] of [...byFam.entries()].sort((a, c) => a[0] - c[0])) {
