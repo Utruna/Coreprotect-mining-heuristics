@@ -36,6 +36,10 @@ import pandas as pd
 
 # Pas de plus de JUMP_DISTANCE blocs : deplacement sans minage, coupe la continuite.
 JUMP_DISTANCE = 4.0
+# Apres une arrivee dans une cavite, le premier bloc casse peut etre un
+# minerai deja visible. Les cinq suivants sont examines avec un poids decroissant
+# selon leur distance depuis ce premier minerai.
+CAVE_ARRIVAL_FOLLOWUP_BLOCKS = 5
 # Pas de creusage : <= DIG_STEP_DISTANCE blocs (couvre les diagonales sqrt(3) ~ 1.73
 # des tunnels 2 de haut). Au-dela, le joueur s'est deplace sans casser son chemin.
 DIG_STEP_DISTANCE = 2.0
@@ -77,6 +81,8 @@ SCORE_RAMPS: dict[str, tuple[float, float, float]] = {
     "target_per_100_dig": (0.8, 3.0, 0.4),  # bornes remplacees par TARGET_RATE_RAMPS
     "detour_factor": (3.0, 1.4, 0.3),  # bornes inversees : petit detour = suspect
     "turn_toward_ore_rate": (0.5, 0.85, 0.3),
+    # Minerai cible apres une arrivee rapide en grotte, pondere par proximite.
+    "cave_followup_target_rate": (0.0, 1.0, 0.2),
 }
 
 # Preuve minimale par indicateur : (colonne de comptage, minimum requis). Sous le
@@ -86,6 +92,7 @@ MIN_TURNS_EVALUATED = 5
 EVIDENCE_REQUIREMENTS: dict[str, tuple[str, int]] = {
     "detour_factor": ("n_detour_pairs", MIN_DETOUR_PAIRS),
     "turn_toward_ore_rate": ("n_turns_evaluated", MIN_TURNS_EVALUATED),
+    "cave_followup_target_rate": ("n_cave_arrivals", 1),
 }
 
 # Sous MIN_WEIGHT_SUM de poids d'indicateurs calculables, le score est plafonne :
@@ -263,6 +270,34 @@ def compute_session_features(seg: pd.DataFrame, target: str = "diamond") -> dict
     n_target_dig = int(((seg["ore"] == target).to_numpy() & dig_mask).sum())
     veins = ore_veins(seg, target)
 
+    # Un saut spatial correspond a une arrivee dans une cavite. La regle
+    # ne s'applique que si le premier bloc casse a l'arrivee est un minerai
+    # visible : miner ensuite, apres un bloc non minerai, revele une recherche
+    # ciblee. Un minerai consecutif prolonge simplement un filon et reste normal.
+    cave_arrivals = np.flatnonzero(dists > JUMP_DISTANCE) + 1
+    ores = seg["ore"].notna().to_numpy()
+    cave_arrivals = cave_arrivals[ores[cave_arrivals]]
+    target_ores = (seg["ore"] == target).to_numpy()
+    n_cave_followup_slots = 0
+    n_cave_followup_target = 0
+    cave_followup_proximity = []
+    for arrival in cave_arrivals:
+        followups = np.arange(
+            arrival + 1,
+            min(arrival + 1 + CAVE_ARRIVAL_FOLLOWUP_BLOCKS, n_blocks),
+        )
+        followups = followups[~ores[followups - 1]]
+        n_cave_followup_slots += len(followups)
+        target_followups = followups[target_ores[followups]]
+        n_cave_followup_target += len(target_followups)
+        if not len(followups):
+            continue
+        if len(target_followups):
+            distances = np.linalg.norm(pos[target_followups] - pos[arrival], axis=1)
+            cave_followup_proximity.append(float(np.max(1.0 / distances)))
+        else:
+            cave_followup_proximity.append(0.0)
+
     # Blocs mines entre la fin d'un filon et le debut du suivant.
     between = [
         veins[k + 1]["first"] - veins[k]["last"] - 1
@@ -313,6 +348,13 @@ def compute_session_features(seg: pd.DataFrame, target: str = "diamond") -> dict
         "target_per_100_dig": round(n_target_dig * per100_dig, 2) if not math.isnan(per100_dig) else math.nan,
         "n_target_veins": len(veins),
         "n_dig_veins": len(dig_veins),
+        "n_cave_arrivals": len(cave_arrivals),
+        "n_cave_followup_slots": n_cave_followup_slots,
+        "n_cave_followup_target": n_cave_followup_target,
+        "cave_followup_target_rate": (
+            round(float(np.mean(cave_followup_proximity)), 3)
+            if cave_followup_proximity else math.nan
+        ),
         "n_detour_pairs": len(detours),
         "n_turns_evaluated": evaluated,
         "mean_blocks_between_veins": round(float(np.mean(between)), 1) if between else math.nan,
@@ -350,15 +392,16 @@ def score_session(features: dict[str, float], target: str = "diamond") -> dict[s
     for name, (low, high, weight) in SCORE_RAMPS.items():
         if name == "target_per_100_dig":
             low, high = TARGET_RATE_RAMPS.get(target, DEFAULT_RATE_RAMP)
-        value = features[name]
+        value = features.get(name, math.nan)
         evidence = EVIDENCE_REQUIREMENTS.get(name)
         if evidence is not None:
             count = features.get(evidence[0])
             if count is not None and count < evidence[1]:
                 value = math.nan
-            # Session en couloir : aucun choix de navigation, l'intentionnalite
-            # ne porte aucun signal (les filons se trouvaient sur la ligne).
-            if is_corridor:
+            # Session en couloir : aucun choix de navigation, les deux signaux
+            # fondes sur les virages et detours ne portent aucun signal. Le
+            # suivi apres une arrivee en grotte reste interpretable.
+            if is_corridor and name in {"detour_factor", "turn_toward_ore_rate"}:
                 value = math.nan
         indicator = _ramp(value, low, high)
         contributions[f"ind_{name}"] = round(indicator, 3) if not math.isnan(indicator) else math.nan

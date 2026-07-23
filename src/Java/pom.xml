@@ -15,7 +15,9 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <!-- spigot-api est l'API commune : compiler contre elle rend le plugin
          compatible Paper ET Spigot (Paper implémente spigot-api + des extras). -->
-    <spigot.api.version>1.20.4-R0.1-SNAPSHOT</spigot.api.version>
+    <!-- Compilé contre 1.21.x (API stable) ; tourne sur 1.21.11. Ajuste au
+         besoin vers une version réellement publiée sur le repo Spigot. -->
+    <spigot.api.version>1.21.1-R0.1-SNAPSHOT</spigot.api.version>
     <!-- Dernière version publiée au moment de l'écriture (github.com/xerial/sqlite-jdbc/releases).
          À vérifier avant un build de prod, ne pas supposer que ça reste vrai indéfiniment. -->
     <sqlite.jdbc.version>3.53.2.0</sqlite.jdbc.version>

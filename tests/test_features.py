@@ -187,6 +187,61 @@ def test_cave_picker_is_not_flagged():
     assert result["verdict"] == "indeterminable"
 
 
+def test_ore_after_cave_arrival_is_suspicious_but_arrival_ore_is_not():
+    # Le saut de 19 blocs represente le deplacement dans une cavite, quel que
+    # soit le temps ecoule. Le minerai a l'arrivee (index 2) est visible et neutre. Le
+    # bloc 3 est de la pierre ; le minerai en 3e casse (index 4) est suspect.
+    seg = make_session(
+        [(0, 0, 0), (1, 0, 0), (20, 0, 0), (21, 0, 0), (22, 0, 0)],
+        diamonds={2, 4},
+    )
+    seg.loc[2:, "time"] += 3_600
+
+    feats = compute_session_features(seg)
+
+    assert feats["n_cave_arrivals"] == 1
+    assert feats["n_cave_followup_slots"] == 1
+    assert feats["n_cave_followup_target"] == 1
+    assert feats["cave_followup_target_rate"] == 0.5
+    assert score_session(feats)["verdict"] == "a surveiller"
+
+
+def test_ore_vein_after_cave_arrival_is_not_suspicious():
+    # Les minerais consecutifs forment un filon visible : aucun ne doit etre
+    # compte comme une cible suivie en grotte, meme en 2e ou 3e casse.
+    seg = make_session(
+        [(0, 0, 0), (1, 0, 0), (20, 0, 0), (21, 0, 0), (22, 0, 0)],
+        diamonds={2, 3, 4},
+    )
+
+    feats = compute_session_features(seg)
+
+    assert feats["n_cave_arrivals"] == 1
+    assert feats["n_cave_followup_slots"] == 0
+    assert feats["n_cave_followup_target"] == 0
+    assert math.isnan(feats["cave_followup_target_rate"])
+
+
+def test_cave_followup_suspicion_decreases_with_distance():
+    # A nombre de casses identique, une cible a deux blocs du minerai d'arrivee
+    # pese 2,5 fois plus dans le score qu'une cible situee a cinq blocs.
+    close = make_session(
+        [(0, 0, 0), (1, 0, 0), (20, 0, 0), (21, 0, 0), (22, 0, 0)],
+        diamonds={2, 4},
+    )
+    far = make_session(
+        [(0, 0, 0), (1, 0, 0), (20, 0, 0), (21, 0, 0), (22, 0, 0), (23, 0, 0), (24, 0, 0), (25, 0, 0)],
+        diamonds={2, 7},
+    )
+
+    close_features = compute_session_features(close)
+    far_features = compute_session_features(far)
+
+    assert close_features["cave_followup_target_rate"] == 0.5
+    assert far_features["cave_followup_target_rate"] == 0.2
+    assert score_session(close_features)["score"] > score_session(far_features)["score"]
+
+
 def test_corridor_session_is_capped():
     # Long couloir diagonal en escalier (zigzag bloc a bloc) avec des diamants
     # exposes ramasses au passage : aucune decision de navigation, les

@@ -813,6 +813,7 @@ function buildTraces(S) {
 
   const tunnel = empty();
   const path = { x: [], y: [], z: [] };
+  const pathHover = empty();
   const byFam = new Map();
   const counts = { tunnel: 0, fam: new Map() };
   for (const k of idx) {
@@ -834,6 +835,19 @@ function buildTraces(S) {
     bucket.text.push(hover(k));
   }
 
+  for (let i = 1; i < idx.length; i++) {
+    const previous = idx[i - 1];
+    const current = idx[i];
+    const dx = S.x[current] - S.x[previous];
+    const dy = S.y[current] - S.y[previous];
+    const dz = S.z[current] - S.z[previous];
+    const distance = Math.hypot(dx, dy, dz);
+    pathHover.x.push((S.x[previous] + S.x[current]) / 2);
+    pathHover.y.push((S.z[previous] + S.z[current]) / 2);
+    pathHover.z.push((S.y[previous] + S.y[current]) / 2);
+    pathHover.text.push("Distance : " + distance.toFixed(2) + " blocs");
+  }
+
   const traces = [];
   if (!state.hidden.has("tunnel")) {
     traces.push({
@@ -847,6 +861,12 @@ function buildTraces(S) {
       type: "scatter3d", mode: "lines", name: "Progression", hoverinfo: "skip",
       x: path.x, y: path.y, z: path.z,
       line: { color: DATA.pathColor, width: 1.5 }, opacity: 0.45,
+    });
+    traces.push({
+      type: "scatter3d", mode: "markers", name: "Distance entre blocs",
+      x: pathHover.x, y: pathHover.y, z: pathHover.z, text: pathHover.text,
+      hoverinfo: "text", showlegend: false,
+      marker: { size: 3, color: DATA.pathColor, opacity: 0.001 },
     });
   }
   for (const [fi, b] of [...byFam.entries()].sort((a, c) => a[0] - c[0])) {

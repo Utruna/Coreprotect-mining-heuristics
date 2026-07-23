@@ -1,7 +1,7 @@
 name: XRayGateway
 version: '0.2.0'
 main: net.utruna.xrayindexer.GatewayPlugin
-api-version: '1.20'
+api-version: '1.21'
 description: >
   Passerelle HTTP en lecture seule au-dessus de la base CoreProtect. Sert des
   tranches brutes de co_block (paginées par rowid) et les tables de
