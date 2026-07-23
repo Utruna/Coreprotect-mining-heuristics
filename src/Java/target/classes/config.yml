@@ -1,0 +1,29 @@
+# Chemin vers la base CoreProtect. Relatif au dossier du serveur.
+# Elle n'est ouverte qu'en lecture seule stricte (mode=ro + PRAGMA query_only) :
+# la passerelle ne crée, ne modifie et ne supprime jamais rien dedans.
+coreprotect-db-path: "plugins/CoreProtect/database.db"
+
+# Nom des tables CoreProtect. À adapter seulement si votre schéma diffère.
+# (Vérifié : co_block n'a pas de colonne `id` — la passerelle utilise le rowid.)
+table:
+  block: "co_block"
+  user: "co_user"
+  material-map: "co_material_map"
+  world: "co_world"
+
+gateway:
+  # Adresse d'écoute. 127.0.0.1 = accès local uniquement (recommandé), à exposer
+  # au serveur de calcul distant via un tunnel SSH ou un VPN. Ne mettez 0.0.0.0
+  # que derrière un firewall qui restreint l'accès au port.
+  bind: "127.0.0.1"
+  port: 8787
+  backlog: 0
+  # Nombre de requêtes servies en parallèle (chacune ouvre sa connexion RO).
+  threads: 4
+  # JETON OBLIGATOIRE. Le plugin refuse de démarrer tant qu'il vaut CHANGE_ME.
+  # Générez une valeur longue et aléatoire, gardez-la secrète (elle donne accès
+  # en lecture à l'historique CoreProtect).
+  token: "CHANGE_ME"
+  # Nombre maximum de lignes co_block renvoyées par appel /blocks (borne le lot
+  # et donc la mémoire/le temps par requête ; le client pagine au-delà).
+  max-page-size: 50000

@@ -36,6 +36,10 @@ Rendu ecrit : reports/figures/mining_sessions_3d.html (5.0 Mo)
 | `--min-blocks` | `50` | Nombre minimal de blocs cassés pour qu'une session soit gardée |
 | `--output` | `reports/figures/mining_sessions_3d.html` | Fichier HTML généré (`_anon` ajouté si `--anonymize`) |
 | `--anonymize` | — | Remplace les pseudos par des pseudos inventés pour pouvoir partager la page |
+| `--annotation` | — | Mode annotation : verdict Legit / Suspect / Triche + tag Grotte par session, export CSV — workflow détaillé dans [data/labels/README.md](data/labels/README.md) |
+| `--include-cave-sessions` | — | Garde les sessions écartées par le filtre grottes / géodes |
+| `--include-surface-sessions` | — | Garde les sessions dominées par la récolte de surface (bois, sable, grès) |
+| `--split` | — | `monthly` : une page par mois calendaire UTC (suffixe `_AAAA-MM`), nécessite une fenêtre bornée — voir la section « Longues périodes » |
 
 Exemple sur une autre base, avec des sessions plus fines :
 
@@ -62,8 +66,9 @@ Seul `plotly` est requis (la page embarque plotly.js, le rendu se fait dans le n
 
 1. **Extraction** — récupère les blocs cassés (`action = 0`) par les vrais joueurs uniquement (uuid non nul, ce qui exclut `#lava`, `#gravity`, etc.), en ignorant les blocs qu'un joueur avait lui-même posés avant de les recasser (mêmes règles que `extract_mining_events.py`).
 2. **Segmentation en sessions** — trie les cassages par joueur et par monde, puis coupe une session dès qu'un trou d'inactivité dépasse `--gap` secondes. Les micro-sessions sous `--min-blocks` blocs sont écartées.
-3. **Analyse** — features de trajectoire et score de suspicion V1 calculés par session et par minerai cible (voir [readmeAnalyse.md](readmeAnalyse.md)), embarqués dans la page.
-4. **Rendu 3D** — sérialise le tout dans une page HTML unique : bandeau de contrôle, scène Plotly plein écran, panneau d'analyse latéral.
+3. **Filtres de pertinence** — trois familles de sessions sortent du cadre de l'analyse x-ray et sont écartées avant tout calcul (règles détaillées dans [readmeAnalyse.md](readmeAnalyse.md)) : les sessions minées dans l'**End** (aucun minerai n'y apparaît, casser de l'endstone n'est jamais du x-ray), celles qui ressemblent à des **cavernes / géodes naturelles** (`--include-cave-sessions` pour les garder) et celles dominées par la **récolte de surface** — bois, sable, grès (`--include-surface-sessions` pour les garder).
+4. **Analyse** — features de trajectoire et score de suspicion V1 calculés par session et par minerai cible (voir [readmeAnalyse.md](readmeAnalyse.md)), embarqués dans la page. Une session n'est scorée que pour les minerais **possibles dans sa dimension** (pas de score diamant au Nether, ni ancient debris / quartz ailleurs ; l'or existe dans les deux).
+5. **Rendu 3D** — sérialise le tout dans une page HTML unique : bandeau de contrôle, scène Plotly plein écran, panneau d'analyse latéral.
 
 Si tu fournis `--window`, `--start` ou `--end`, la page ne charge que les événements de cette fenêtre temporelle. Sans ces options, elle prend toute la base.
 
@@ -71,10 +76,12 @@ Si tu fournis `--window`, `--start` ou `--end`, la page ne charge que les évén
 
 La scène occupe tout l'écran et s'adapte à la taille de la fenêtre. Le bandeau supérieur regroupe les contrôles :
 
+- **Sélecteur de monde** : restreint la liste des sessions, le classement et la vue d'ensemble à un seul monde de la base (« Tous les mondes » par défaut). Les mondes proposés sont ceux réellement présents dans les sessions extraites.
 - **Sélecteur de session** groupé par joueur. Chaque entrée affiche plage horaire, nombre de blocs et de minerais ; à côté, le rappel complet de la session (joueur, monde, date, durée).
 - **Fenêtre temporelle** : un double curseur (début / fin, à la seconde) restreint l'affichage à une sous-période de la session. Les deux champs d'heure à côté des curseurs sont éditables directement (`HH:MM:SS`), et le bouton **Session entière** réinitialise la fenêtre.
 - **Stats live** à droite : blocs, minerais (avec pourcentage) et minerai surveillé recalculés à chaque changement de fenêtre — pratique pour isoler le moment exact d'un pic de diamants.
 - **Bouton Analyse** : affiche / masque le panneau latéral.
+- **Bouton Vue d'ensemble** : histogramme des scores (échelle log) + nuage score V1 × écart au corpus sur toutes les sessions de la page (restreint au monde choisi), avec son propre sélecteur de minerai — cliquer un point ouvre la session dans la scène.
 - **Bouton Métriques ?** : ouvre la page d'explication intégrée — lecture de la scène, définition de chaque métrique, fonctionnement du score (fermeture par Échap, clic hors de la fenêtre ou bouton).
 
 Le panneau d'analyse (à droite) :
@@ -85,7 +92,7 @@ Le panneau d'analyse (à droite) :
 - **Écart au corpus (modèle d'anomalie)** : jauge 0-100 de l'Isolation Forest entraîné sur la vraie base (voir [readmeAnalyse.md](readmeAnalyse.md)), avec repère à 50 (seuil de contamination) et la feature qui tire le plus l'écart. Affiché uniquement si un modèle existe dans `data/models/` pour le minerai choisi (`scripts/train_anomaly_model.py`) — c'est un second regard indépendant du score V1, et atypique ≠ tricheur.
 - **Détails de la session** : durée, blocs, blocs/min, filons, blocs entre filons, segments droits H/V, virages/100, pas verticaux.
 - **Localisation** : monde et coordonnées du centre de la zone minée, avec un bouton **Copier /tp** qui met `/tp @s X Y Z` dans le presse-papier — à coller en jeu pour aller inspecter sur place (le point visé est un bloc cassé au milieu du parcours, donc dans la galerie creusée ; penser à se mettre dans le bon monde avant).
-- **Classement des sessions** trié par score pour le minerai choisi — cliquer sur une ligne ouvre la session.
+- **Classement des sessions** trié par score pour le minerai choisi (recherche par joueur, tri par score V1 / écart au corpus / mix / blocs / durée) — cliquer sur une ligne ouvre la session. Seules les sessions dont la dimension peut contenir le minerai y figurent ; une session hors dimension ouverte quand même affiche « minerai absent de ce monde » dans le panneau.
 
 L'analyse porte sur la **session entière** : la fenêtre temporelle filtre la scène 3D, pas le score.
 
@@ -119,6 +126,20 @@ Sur la base de test, les trois profils sont immédiatement reconnaissables :
 | [Utruna](reports/figures/preview_Utruna.png) | Grille de galeries parallèles à Y≈-60, minerais trouvés le long des branches | Minage légitime |
 
 Un joueur légitime creuse des structures régulières et ramasse tout ce qu'il croise ; un x-rayeur trace des chemins irréguliers mais étonnamment efficaces, presque exclusivement vers le minerai de valeur.
+
+## Longues périodes : pages mensuelles et récupération
+
+Une page unique ne tient pas la longueur : le payload JSON pèse ~30 octets par bloc cassé, et au-delà de ~150-200 Mo de HTML le navigateur souffre (limite dure de Chromium/Edge : ~512 Mo par chaîne, une page de 1 Go ne se charge simplement pas). Générer 6 mois d'une grosse base en une page produit un fichier inutilisable — et un pic de RAM de 15-20 Go pendant la génération.
+
+La bonne méthode pour une longue période : `--split monthly`. Chaque mois calendaire UTC est extrait, analysé, écrit **puis libéré de la mémoire** avant le suivant (pic de RAM = un seul mois) :
+
+```powershell
+.venv\Scripts\python.exe scripts\render_mining_3d.py --db data\raw\CoreProtect\database_clean.db --start 2026-01-01 --end 2026-07-01 --annotation --split monthly --output reports\figures\mining_3d_annotation.html
+```
+
+Sortie : `mining_3d_annotation_2026-01.html`, `_2026-02.html`, … Un mois vide est sauté. Les annotations suivent d'une page à l'autre (localStorage, clé stable pseudo|monde|début — voir [data/labels/README.md](data/labels/README.md)) ; à noter qu'avec `--anonymize`, le mapping des pseudos est recalculé à chaque mois.
+
+**Récupérer une page déjà générée trop grosse** (au lieu de relancer l'extraction) : `scripts/split_mining_page.py` relit le JSON embarqué session par session et réécrit des pages plus petites, sans rien recalculer — voir [scripts/README.md](scripts/README.md) (granularité `--by month|week|day`, exclusion d'un compte machine avec `--drop-player`).
 
 ## Export PNG statique
 

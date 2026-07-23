@@ -12,7 +12,7 @@ trajectoires (la roche est le chemin, les minerais sont la cible) :
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -31,8 +31,8 @@ def parse_utc_datetime(value: str) -> datetime:
         raw = f"{year}-{int(month):02d}-{int(day):02d}{sep}{time_part}"
     dt = datetime.fromisoformat(raw)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 EXTRACTION_SQL_BASE = """
     SELECT
@@ -310,11 +310,21 @@ def _build_extraction_sql(start_ts: int | None = None, end_ts: int | None = None
     return sql, params
 
 
+def _connect_readonly(db_path: Path) -> sqlite3.Connection:
+    """Ouvre une base SQLite en lecture seule, de facon portable (les URI file:
+    de SQLite exigent des slashes et un encodage propre, que Path.as_uri fournit)."""
+    uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
+    return sqlite3.connect(uri, uri=True)
+
+
 def load_breaks(
     db_path: Path, start_ts: int | None = None, end_ts: int | None = None
 ) -> tuple[pd.DataFrame, dict[int, str]]:
-    """Charge les blocs casses par les vrais joueurs, avec la colonne `ore` (famille ou NaN)."""
-    conn = sqlite3.connect(db_path)
+    """Charge les blocs casses par les vrais joueurs, avec la colonne `ore` (famille ou NaN).
+
+    Lit une base au schema CoreProtect (base de test, copie, ou miroir local
+    alimente par la passerelle XRayGateway), en lecture seule."""
+    conn = _connect_readonly(db_path)
     try:
         sql, params = _build_extraction_sql(start_ts=start_ts, end_ts=end_ts)
         df = pd.read_sql(sql, conn, params=params)

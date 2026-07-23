@@ -25,6 +25,7 @@ build/
 !/reports/figures/.gitkeep
 /data/labels/*
 !/data/labels/README.md
+apache-maven-3.9.12/*
 
 # Local VS Code state
 .vscode/*.log
