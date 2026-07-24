@@ -17,16 +17,18 @@ l'image Docker (voir Dockerfile).
 
 from __future__ import annotations
 
+import logging
 import math
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 
-from xray_detector.gateway_client import sync as gateway_sync
 from xray_detector.anomaly_model import load_model, score_anomalies
 from xray_detector.features import compute_session_features, score_session
+from xray_detector.gateway_client import sync as gateway_sync
 from xray_detector.mining import (
     ORE_FAMILIES,
     filter_cave_like_sessions,
@@ -49,25 +51,35 @@ if not GATEWAY_TOKEN:
 MIRROR_PATH = Path(os.environ.get("MIRROR_PATH", "/data/mirror.db"))
 MODELS_DIR = Path(__file__).resolve().parent / "models"
 
-app = FastAPI(title="XRayGateway Analysis API", version="0.2.0")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("xrayindexer.api")
+
 _anomaly_models: dict[str, object] = {}
 
 
-@app.on_event("startup")
-def _startup() -> None:
-    if not GATEWAY_URL or not GATEWAY_TOKEN:
-        # Ne bloque pas le demarrage (utile pour tester /health en isolation),
-        # mais /sync et /report echoueront tant que ces deux variables
-        # ne sont pas fournies au container.
-        print("ATTENTION : GATEWAY_URL / GATEWAY_TOKEN absents de l'environnement.")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # GATEWAY_TOKEN est deja garanti non vide (raise a l'import). Seul GATEWAY_URL
+    # peut manquer ici : /sync et /report le signaleront (HTTP 500) le cas echeant.
+    if not GATEWAY_URL:
+        logger.warning("GATEWAY_URL absent de l'environnement : /sync et /report echoueront.")
     MIRROR_PATH.parent.mkdir(parents=True, exist_ok=True)
     if MODELS_DIR.exists():
-        for path in MODELS_DIR.glob("anomaly_iforest_*.joblib"):
+        for path in sorted(MODELS_DIR.glob("anomaly_iforest_*.joblib")):
             ore_key = path.stem.removeprefix("anomaly_iforest_")
             try:
                 _anomaly_models[ore_key] = load_model(path)
+                logger.info("Modele charge : %s (%s)", ore_key, path.name)
             except Exception as exc:  # noqa: BLE001 - on log et on continue sans ce modele
-                print(f"Modele {path.name} non charge : {exc}")
+                logger.warning("Modele %s non charge : %s", path.name, exc)
+    yield
+    _anomaly_models.clear()
+
+
+app = FastAPI(title="XRayGateway Analysis API", version="0.2.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -108,7 +120,9 @@ def report(
     sync_first: bool = Query(True, description="Synchronise le miroir avant d'analyser."),
 ) -> dict:
     if ore not in ORE_FAMILIES:
-        raise HTTPException(400, f"Minerai inconnu : {ore}. Valeurs possibles : {sorted(ORE_FAMILIES)}")
+        raise HTTPException(
+            400, f"Minerai inconnu : {ore}. Valeurs possibles : {sorted(ORE_FAMILIES)}"
+        )
 
     if sync_first:
         if not GATEWAY_URL or not GATEWAY_TOKEN:
