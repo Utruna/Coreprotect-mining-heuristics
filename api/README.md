@@ -109,6 +109,47 @@ peuvent etre ajoutees a la commande, par exemple `--window last-24h` ou
 `--anonymize`. Le rendu contient des pseudos et coordonnees lorsqu'il n'est pas
 anonymise : ne le rendez pas public sans `--anonymize`.
 
+## Automatiser start/stop/restart avec le serveur Minecraft
+
+Le script `api/mc-with-docker.ps1` pilote le service Docker API sur le meme
+cycle de vie que le serveur MC.
+
+### 1) Demarrage couple (API + serveur MC)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File api/mc-with-docker.ps1 \
+  -Action start \
+  -Build \
+  -ServerStartScript "E:/MinecraftServer/start.bat"
+```
+
+Le script:
+- lance `xrayindexer-api` via `docker compose up -d`;
+- lance ensuite le serveur Minecraft;
+- arrete automatiquement `xrayindexer-api` quand le processus serveur se ferme.
+
+### 2) Extinction API seule
+
+```powershell
+powershell -ExecutionPolicy Bypass -File api/mc-with-docker.ps1 -Action stop
+```
+
+### 3) Redemarrage API seule
+
+```powershell
+powershell -ExecutionPolicy Bypass -File api/mc-with-docker.ps1 -Action restart
+```
+
+Si `docker-compose.yml` ou le nom du service changent:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File api/mc-with-docker.ps1 \
+  -Action start \
+  -ComposeFile "E:/Projet/AntiCheat/api/docker-compose.yml" \
+  -ApiService "xrayindexer-api" \
+  -ServerStartScript "E:/MinecraftServer/start.bat"
+```
+
 ## Ce qui est vérifié vs supposé — honnêteté avant tout
 
 **Vérifié** : `main.py` appelle `gateway_client.sync`, `mining.load_breaks`,
