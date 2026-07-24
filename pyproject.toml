@@ -23,7 +23,9 @@ dependencies = [
 dev = [
   "ipykernel>=6.0",
   "pytest>=8.0",
-  "ruff>=0.6"
+  "ruff>=0.6",
+  "fastapi>=0.115",
+  "httpx>=0.27"
 ]
 viz = [
   "matplotlib>=3.9",
