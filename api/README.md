@@ -34,27 +34,41 @@ fait déjà ce travail.
 
 ## Avant de builder
 
+**Aucune copie manuelle à faire.** Ce dossier ne duplique NI le pipeline
+(`src/xray_detector/`, qui contient déjà `gateway_client.py`) NI les modèles
+(`data/models/*.joblib`) : ils ont une source unique dans le repo, et le
+Dockerfile va les chercher là. C'est pour ça qu'on **build depuis la racine du
+repo**, avec `-f api/Dockerfile` (voir ci-dessous), et surtout pas depuis `api/`.
+
 ```
-xrayindexer-api/
-├── Dockerfile
-├── requirements.txt
-├── main.py
-├── xray_detector/       <-- copié depuis src/xray_detector (déjà fait ici)
-├── gateway_client.py    <-- copié (déjà fait ici)
-└── models/               <-- À COPIER : anomaly_iforest_<ore>.joblib
+AntiCheat/                      <-- contexte de build (racine du repo)
+├── .dockerignore               <-- garde le contexte léger (exclut data/raw ~102 Go)
+├── src/xray_detector/          <-- source unique du pipeline + gateway_client.py
+├── data/models/*.joblib        <-- source unique des modèles entraînés
+└── api/
+    ├── Dockerfile              COPY src/xray_detector, COPY data/models/*.joblib
+    ├── docker-compose.yml
+    ├── requirements.txt
+    ├── main.py
+    ├── .env.example
+    └── README.md               (ce fichier)
 ```
 
+Seule préparation nécessaire : le token de la passerelle.
+
 ```bash
-cp /chemin/vers/votre/projet/data/models/anomaly_iforest_diamond.joblib ./models/
-cp /chemin/vers/votre/projet/data/models/anomaly_iforest_ancient_debris.joblib ./models/
-cp .env.example .env   # puis y mettre le vrai gateway.token du plugin
+cp api/.env.example api/.env   # puis y mettre le vrai gateway.token du plugin
 ```
 
 ## Build et déploiement
 
+Depuis la **racine du repo** (le contexte de build doit voir `src/` et `data/`) :
+
 ```bash
-docker build -t xrayindexer-api:0.2.0 .
-docker compose up -d
+docker build -f api/Dockerfile -t xrayindexer-api:0.2.0 .
+# ou, en une fois via compose (context=.. déjà configuré) :
+docker compose -f api/docker-compose.yml up -d --build
+
 curl http://127.0.0.1:8000/health
 curl -X POST http://127.0.0.1:8000/sync
 curl "http://127.0.0.1:8000/report?ore=diamond&start=2026-07-01&end=2026-07-08"
