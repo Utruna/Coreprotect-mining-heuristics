@@ -41,6 +41,8 @@ from xray_detector.mining import (
 # (docker run -e / docker-compose env_file), comme tout secret.
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "")
 GATEWAY_TOKEN = os.environ.get("GATEWAY_TOKEN", "")
+if not GATEWAY_TOKEN:
+    raise RuntimeError("GATEWAY_TOKEN manquant : renseignez api/.env avant de démarrer.")
 # Doit vivre sur un volume PERSISTANT (voir docker-compose.yml) : sans ça, le
 # miroir repart de zéro (resync complète depuis rowid 0) à chaque redémarrage
 # du container, ce qui annule l'intérêt de la synchro incrémentale.
