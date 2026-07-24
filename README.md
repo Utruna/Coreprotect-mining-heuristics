@@ -13,6 +13,22 @@ Un second regard complète le score : une forêt d'isolation (Isolation Forest) 
 
 Sur la base de test (vérité terrain connue), le score sépare nettement les deux joueurs x-ray simulés (67.2 et 59.7) du minage légitime (18.8) — détail dans [readmeAnalyse.md](readmeAnalyse.md#résultats-sur-la-base-test-vérité-terrain-connue).
 
+## Aperçu de l'interface
+
+### Vue d'ensemble du plugin
+![Vue complète de l'interface](docs/vue_complete.png)
+
+### Filtres et métriques
+| Filtres | Métriques |
+|---------|----------|
+| ![Filtre avancé](docs/focus_filtre.png) | ![Métriques détaillées](docs/focus_metrics.png) |
+
+### Comparaison des comportements
+![Comparaison minage optimisé vs classique](docs/focus_metrics_minage_optimisé_classique.png)
+
+### Vue ensemble graphique
+![Vue graphique complète](docs/vue_ensembe_graphique.png)
+
 ## Démarrage rapide
 
 1. Ouvrir le projet dans VS Code.
