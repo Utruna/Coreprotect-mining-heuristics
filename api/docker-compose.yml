@@ -1,0 +1,40 @@
+services:
+  xrayindexer-api:
+    image: xrayindexer-api:0.2.0
+    container_name: xrayindexer-api
+    restart: unless-stopped
+    ports:
+      # Lié uniquement en local : ne PAS retirer le "127.0.0.1:", sinon l'API
+      # (et donc les endpoints de la passerelle qu'elle relaie) devient
+      # accessible depuis le réseau.
+      - "127.0.0.1:8000:8000"
+    environment:
+      # URL de la passerelle exposee par xray-gateway-plugin sur CE MEME
+      # serveur (le plugin et ce container tournent sur la meme machine).
+      GATEWAY_URL: "http://host.docker.internal:8787"
+      MIRROR_PATH: "/data/mirror.db"
+    env_file:
+      # Le token Bearer (gateway.token du plugin) vit UNIQUEMENT ici, jamais
+      # dans ce fichier versionné. Voir .env.example.
+      - .env
+    volumes:
+      # Persiste le miroir SQLite entre redemarrages : sans ce volume, chaque
+      # redemarrage repart d'une resync complete depuis rowid 0, ce qui
+      # annule l'interet de la synchro incrementale de gateway_client.py.
+      - xrayindexer-mirror:/data
+    extra_hosts:
+      # host.docker.internal n'est resolu nativement que sur Docker Desktop
+      # (Mac/Windows). Sur un serveur Linux (le cas probable pour une machine
+      # dediee), cette ligne est OBLIGATOIRE (Docker 20.10+) pour joindre le
+      # port ouvert par le plugin sur la machine hote.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 2g
+
+volumes:
+  xrayindexer-mirror:
