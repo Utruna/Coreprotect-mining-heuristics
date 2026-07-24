@@ -7,7 +7,15 @@
 # (src/xray_detector, data/models) au lieu d'en dupliquer une copie dans api/.
 # Un .dockerignore à la racine restreint le contexte de build (sinon data/raw
 # ~102 Go partirait dans le contexte).
-FROM python:3.11-slim
+#
+# Version de patch épinglée (et non le tag flottant 3.11-slim) : reproductibilité
+# de l'image livrée aux partenaires. Encore plus strict possible via un digest
+# (@sha256:...), au prix d'un pull réseau pour le récupérer.
+FROM python:3.11.15-slim
+
+# Utilisateur non-privilégié dédié : rien ne tourne en root dans le container.
+RUN useradd --system --uid 10001 --user-group \
+    --home-dir /app --shell /usr/sbin/nologin appuser
 
 WORKDIR /app
 
@@ -26,7 +34,13 @@ COPY data/models/anomaly_iforest_ancient_debris.joblib \
 
 COPY api/main.py .
 
+# /data = point de montage du volume persistant (mirror.db). On le crée et on le
+# donne à appuser DANS l'image : un volume nommé hérite de ce propriétaire à sa
+# première création, donc appuser pourra y écrire le miroir sans tourner en root.
+RUN mkdir -p /data && chown -R appuser:appuser /app /data
+
 ENV PYTHONPATH=/app
+USER appuser
 EXPOSE 8000
 
 # 0.0.0.0 dans le container : c'est `-p 127.0.0.1:8000:8000` au `docker run`
