@@ -814,6 +814,7 @@ function buildTraces(S) {
   const tunnel = empty();
   const path = { x: [], y: [], z: [] };
   const pathHover = empty();
+  const pathHoverSize = [];
   const byFam = new Map();
   const counts = { tunnel: 0, fam: new Map() };
   for (const k of idx) {
@@ -835,6 +836,13 @@ function buildTraces(S) {
     bucket.text.push(hover(k));
   }
 
+  // Points de survol intermediaires : ils portent le tooltip "Distance" le long du
+  // segment. Leur nombre et leur rayon de capture suivent la longueur du segment :
+  // a nombre fixe, un pas de 1 bloc recevait autant de cibles qu'un saut de 40 et
+  // elles recouvraient les blocs eux-memes, rendant la scene impossible a survoler.
+  const HOVER_MIN_DIST = 1.5; // en deca, les deux blocs sont voisins : aucune cible
+  const HOVER_SPACING = 2;    // ~1 point de survol tous les 2 blocs
+  const HOVER_MAX = 12;       // plafond (deplacements longs : marche, chute, tp)
   for (let i = 1; i < idx.length; i++) {
     const previous = idx[i - 1];
     const current = idx[i];
@@ -842,11 +850,19 @@ function buildTraces(S) {
     const dy = S.y[current] - S.y[previous];
     const dz = S.z[current] - S.z[previous];
     const distance = Math.hypot(dx, dy, dz);
-    for (let fraction = 0.1; fraction < 1; fraction += 0.1) {
+    if (distance < HOVER_MIN_DIST) continue;
+    const n = Math.min(HOVER_MAX,
+                       Math.max(1, Math.round(distance / HOVER_SPACING)));
+    // Le marqueur reste plus petit que l'ecart entre deux cibles, sinon elles se
+    // masquent entre elles et masquent les extremites du segment.
+    const size = Math.min(12, Math.max(4, 5 * distance / (n + 1)));
+    for (let j = 1; j <= n; j++) {
+      const fraction = j / (n + 1);
       pathHover.x.push(S.x[previous] + dx * fraction);
       pathHover.y.push(S.z[previous] + dz * fraction);
       pathHover.z.push(S.y[previous] + dy * fraction);
       pathHover.text.push("Distance : " + distance.toFixed(2) + " blocs");
+      pathHoverSize.push(size);
     }
   }
 
@@ -868,7 +884,7 @@ function buildTraces(S) {
       type: "scatter3d", mode: "markers", name: "Distance entre blocs",
       x: pathHover.x, y: pathHover.y, z: pathHover.z, text: pathHover.text,
       hoverinfo: "text", showlegend: false,
-      marker: { size: 12, color: DATA.pathColor, opacity: 0.001 },
+      marker: { size: pathHoverSize, color: DATA.pathColor, opacity: 0.001 },
     });
   }
   for (const [fi, b] of [...byFam.entries()].sort((a, c) => a[0] - c[0])) {

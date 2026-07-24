@@ -30,3 +30,4 @@ src/Java/target/*
 # Local VS Code state
 .vscode/*.log
 .claude/*
+.tools/*

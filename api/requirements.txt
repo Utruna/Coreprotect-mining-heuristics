@@ -1,0 +1,11 @@
+# Versions épinglées sur celles réellement résolues et testées de bout en bout
+# dans l'image xrayindexer-api:0.2.0 (pip freeze du container), pour la
+# reproductibilité chez les partenaires. Relever après un test de non-régression.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pandas==3.0.5
+numpy==2.4.6
+scikit-learn==1.9.0
+joblib==1.5.3
+pyarrow==25.0.0
+plotly==6.9.0

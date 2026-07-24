@@ -21,6 +21,7 @@
     <!-- Dernière version publiée au moment de l'écriture (github.com/xerial/sqlite-jdbc/releases).
          À vérifier avant un build de prod, ne pas supposer que ça reste vrai indéfiniment. -->
     <sqlite.jdbc.version>3.53.2.0</sqlite.jdbc.version>
+    <junit.version>5.10.2</junit.version>
   </properties>
 
   <repositories>
@@ -42,11 +43,22 @@
       <artifactId>sqlite-jdbc</artifactId>
       <version>${sqlite.jdbc.version}</version>
     </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
     <finalName>${project.artifactId}-${project.version}</finalName>
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+      </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>

@@ -1,0 +1,11 @@
+# Secret réel de la passerelle : jamais committé (déjà couvert par le
+# .gitignore racine, redoublé ici pour être explicite au niveau du dossier).
+.env
+
+# Miroir SQLite local si quelqu'un lance l'API hors container.
+*.db
+mirror.db
+
+# Pas de models/ ici : les .joblib sont bakés depuis data/models/ (source
+# unique). Si tu en déposes une copie locale pour tester, elle reste ignorée.
+models/
