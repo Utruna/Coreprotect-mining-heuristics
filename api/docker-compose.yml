@@ -1,6 +1,13 @@
 services:
   xrayindexer-api:
     image: xrayindexer-api:0.2.0
+    build:
+      # Contexte = racine du repo (un cran au-dessus de api/) pour que le
+      # Dockerfile copie les sources UNIQUES (src/xray_detector, data/models)
+      # sans les dupliquer dans api/. `docker compose up --build` fonctionne
+      # depuis api/ ; `.dockerignore` racine garde le contexte léger.
+      context: ..
+      dockerfile: api/Dockerfile
     container_name: xrayindexer-api
     restart: unless-stopped
     ports:

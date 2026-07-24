@@ -1,0 +1,38 @@
+# Contexte de build pour api/Dockerfile, buildé DEPUIS LA RACINE du repo :
+#     docker build -f api/Dockerfile -t xrayindexer-api:0.2.0 .
+#
+# CRITIQUE : sans ce fichier, `docker build .` expédierait tout data/raw
+# (~102 Go) + .venv + apache-maven dans le contexte de build. Le Dockerfile ne
+# copie en réalité que src/xray_detector/ et deux .joblib de data/models/.
+
+# Environnements, caches et outils lourds — inutiles à l'image
+.git/
+.venv/
+apache-maven-3.9.12/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Données volumineuses : on ignore les sous-dossiers lourds de data/ mais on
+# GARDE data/models/ (les .joblib que le Dockerfile bake dans l'image).
+# NB : on ne peut pas ignorer `data/` en entier puis réinclure un .joblib —
+# une fois le dossier parent exclu, Docker n'y descend plus. D'où l'exclusion
+# sous-dossier par sous-dossier.
+data/raw/
+data/interim/
+data/processed/
+data/labels/
+data/models/*.bak*
+
+# Plugin Java compilé, rapports, doc, tests, scripts : hors image d'analyse
+src/Java/
+reports/
+docs/
+tests/
+
+# Secrets et états locaux
+**/.env
+**/*.db

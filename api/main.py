@@ -24,7 +24,7 @@ from pathlib import Path
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 
-from gateway_client import sync as gateway_sync
+from xray_detector.gateway_client import sync as gateway_sync
 from xray_detector.anomaly_model import load_model, score_anomalies
 from xray_detector.features import compute_session_features, score_session
 from xray_detector.mining import (
