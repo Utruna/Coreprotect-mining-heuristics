@@ -86,6 +86,29 @@ Docker Desktop Mac/Windows où `host.docker.internal` est résolu nativement).
 - `POST /sync` — synchronise le miroir sans lancer d'analyse (utile en tâche planifiée).
 - `GET /report?ore=diamond&start=...&end=...&sync_first=true` — synchronise (sauf si `sync_first=false`) puis renvoie le rapport JSON, trié par score décroissant.
 
+## Rendu 3D dans le dossier du plugin
+
+Le renderer est un service Compose ponctuel, sans port HTTP. Il lit le miroir
+en lecture seule et ecrit une page HTML autonome dans
+`plugins/XRayGateway/figures/` du serveur Minecraft.
+
+Dans `api/.env`, renseignez le chemin **absolu de l'hote Docker** :
+
+```dotenv
+XRAY_GATEWAY_FIGURES_DIR=E:/MinecraftServer/plugins/XRayGateway/figures
+```
+
+Puis, apres une synchronisation reussie :
+
+```powershell
+docker compose -f api/docker-compose.yml --profile render run --rm xrayindexer-renderer
+```
+
+La page est ecrite sous `mining_sessions_3d.html`. Des options du renderer
+peuvent etre ajoutees a la commande, par exemple `--window last-24h` ou
+`--anonymize`. Le rendu contient des pseudos et coordonnees lorsqu'il n'est pas
+anonymise : ne le rendez pas public sans `--anonymize`.
+
 ## Ce qui est vérifié vs supposé — honnêteté avant tout
 
 **Vérifié** : `main.py` appelle `gateway_client.sync`, `mining.load_breaks`,

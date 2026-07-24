@@ -43,5 +43,24 @@ services:
       start_period: 10s
     mem_limit: 2g
 
+  # Commande ponctuelle de génération de la page 3D. Ne démarre jamais avec
+  # l'API : `docker compose --profile render run --rm xrayindexer-renderer`.
+  xrayindexer-renderer:
+    image: xrayindexer-api:0.2.0
+    profiles: ["render"]
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
+    volumes:
+      - xrayindexer-mirror:/data:ro
+      - "${XRAY_GATEWAY_FIGURES_DIR:-./figures}:/output"
+    command:
+      - python
+      - /app/scripts/render_mining_3d.py
+      - --db
+      - /data/mirror.db
+      - --output
+      - /output/mining_sessions_3d.html
+
 volumes:
   xrayindexer-mirror:

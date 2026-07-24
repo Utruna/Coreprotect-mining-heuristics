@@ -34,10 +34,16 @@ COPY data/models/anomaly_iforest_ancient_debris.joblib \
 
 COPY api/main.py .
 
+# Le renderer reste une commande explicite du service Compose dedie : il ne
+# s'expose pas par HTTP et lit le miroir en lecture seule.
+COPY scripts/render_mining_3d.py ./scripts/render_mining_3d.py
+
 # /data = point de montage du volume persistant (mirror.db). On le crée et on le
 # donne à appuser DANS l'image : un volume nommé hérite de ce propriétaire à sa
 # première création, donc appuser pourra y écrire le miroir sans tourner en root.
-RUN mkdir -p /data && chown -R appuser:appuser /app /data
+RUN mkdir -p /data /app/data \
+    && ln -s /app/models /app/data/models \
+    && chown -R appuser:appuser /app /data
 
 ENV PYTHONPATH=/app
 USER appuser

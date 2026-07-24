@@ -27,11 +27,13 @@ data/processed/
 data/labels/
 data/models/*.bak*
 
-# Plugin Java compilé, rapports, doc, tests, scripts : hors image d'analyse
+# Plugin Java compilé, rapports, doc et tests : hors image d'analyse.
+# Le renderer copie explicitement scripts/render_mining_3d.py.
 src/Java/
 reports/
 docs/
 tests/
+api/figures/
 
 # Secrets et états locaux
 **/.env
